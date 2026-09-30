@@ -1,0 +1,233 @@
+import nodePath from "node:path";
+
+import type { HarnessAdapter, HarnessSession } from "@codex-z/harness-adapter";
+import {
+  mapExternalThreadHarnessError,
+  type DecodedThreadForkRequest,
+  type ExternalHarnessId,
+  type ExternalThreadRpcError,
+  type JsonObject,
+} from "@codex-z/protocol-core";
+import {
+  permissionModeFixedAtCreate,
+  type HarnessPermissionModeId,
+  type NativeCheckpointRef,
+  type NativeSessionRef,
+} from "@codex-z/shared-contracts";
+
+import {
+  createExternalThreadRecordInput,
+  externalThreadValue,
+  type ExternalThreadRepository,
+} from "./external-thread-repository.js";
+import { DELEGATION_THREAD_ID_ENV } from "./delegation-types.js";
+import type { ExternalThread, ExternalThreadRuntime } from "./external-thread-runtime.js";
+
+export type ExternalThreadForkResult =
+  | { ok: false; error: ExternalThreadRpcError }
+  | {
+      ok: true;
+      derived: ExternalThread;
+      thread: JsonObject;
+      responseThread: JsonObject;
+    };
+
+export async function executeExternalThreadFork(input: {
+  source: ExternalThread;
+  fork: DecodedThreadForkRequest;
+  adapters: Map<ExternalHarnessId, HarnessAdapter>;
+  repository: ExternalThreadRepository;
+  runtime: ExternalThreadRuntime;
+  environment?: NodeJS.ProcessEnv;
+}): Promise<ExternalThreadForkResult> {
+  const { source, fork, adapters, repository, runtime } = input;
+  const targetCwd = fork.cwd ?? source.cwd;
+  const changesCwd = targetCwd !== source.cwd;
+  if (
+    fork.path ||
+    (fork.model !== undefined && fork.model !== source.transportModelId) ||
+    (fork.modelProvider !== undefined && fork.modelProvider !== "codex-z")
+  ) {
+    return {
+      ok: false,
+      error: { code: -32602, message: "External Fork cannot override source ownership" },
+    };
+  }
+  if (
+    changesCwd &&
+    (!nodePath.isAbsolute(targetCwd) ||
+      (fork.runtimeWorkspaceRoots !== undefined &&
+        (fork.runtimeWorkspaceRoots.some((root) => !nodePath.isAbsolute(root)) ||
+          !fork.runtimeWorkspaceRoots.includes(targetCwd))))
+  ) {
+    return {
+      ok: false,
+      error: { code: -32602, message: "External Fork target cwd is invalid" },
+    };
+  }
+  if (!source.session.capabilities.history.fork) {
+    return {
+      ok: false,
+      error: { code: -32076, message: "External Harness does not support fork" },
+    };
+  }
+  if (changesCwd && !source.session.capabilities.history.forkAcrossCwd) {
+    return {
+      ok: false,
+      error: { code: -32076, message: "External Harness cannot fork into another cwd" },
+    };
+  }
+  if (!source.running) {
+    const refreshError = await runtime.refresh(source);
+    if (refreshError) return { ok: false, error: refreshError };
+  }
+
+  const mappings = source.record.turnMappings;
+  let boundaryIndex: number;
+  if (fork.lastTurnId) {
+    boundaryIndex = mappings.findIndex(({ hostTurnId }) => hostTurnId === fork.lastTurnId);
+  } else if (fork.beforeTurnId) {
+    const beforeIndex = mappings.findIndex(({ hostTurnId }) => hostTurnId === fork.beforeTurnId);
+    boundaryIndex = beforeIndex < 0 ? -2 : beforeIndex - 1;
+  } else {
+    boundaryIndex = mappings.length - 1;
+  }
+  const boundary = mappings[boundaryIndex];
+  if (boundaryIndex < 0 || !boundary?.nativeCheckpointRef) {
+    return {
+      ok: false,
+      error: { code: -32080, message: "External Fork Checkpoint is unavailable" },
+    };
+  }
+  const nativeSessionRef = source.record.nativeSessionRef;
+  const adapter = adapters.get(source.harnessId);
+  if (!nativeSessionRef || !adapter) {
+    return {
+      ok: false,
+      error: { code: -32079, message: "External Native Session is unavailable" },
+    };
+  }
+
+  let provisional;
+  try {
+    provisional = await repository.createProvisional(
+      createExternalThreadRecordInput({
+        harnessId: source.record.harnessId,
+        cwd: targetCwd,
+        transportModelId: source.transportModelId,
+        ephemeral: fork.ephemeral ?? source.record.ephemeral,
+        historyMode: source.record.historyMode,
+        forkSource: {
+          hostThreadId: source.id,
+          hostTurnId: boundary.hostTurnId,
+        },
+      }),
+    );
+  } catch {
+    return {
+      ok: false,
+      error: { code: -32081, message: "External Fork could not be persisted" },
+    };
+  }
+
+  let opened: Awaited<ReturnType<HarnessAdapter["open"]>>;
+  try {
+    opened = await adapter.open({
+      kind: "fork",
+      cwd: targetCwd,
+      environment: {
+        ...(input.environment ?? process.env),
+        [DELEGATION_THREAD_ID_ENV]: provisional.hostThreadId,
+      },
+      sourceRef: nativeSessionRef as NativeSessionRef,
+      checkpoint: boundary.nativeCheckpointRef as NativeCheckpointRef,
+    });
+  } catch {
+    await repository.removeProvisional(provisional.hostThreadId).catch(() => undefined);
+    return { ok: false, error: { code: -32076, message: "External Thread fork failed" } };
+  }
+  if (!opened.ok) {
+    await repository.removeProvisional(provisional.hostThreadId).catch(() => undefined);
+    return { ok: false, error: mapExternalThreadHarnessError(opened.error, "fork") };
+  }
+
+  const session = opened.value;
+  const inheritedPermissionModeId = await inheritSourcePermissionMode(source, session);
+  try {
+    const derivedNativeRef = session.initialState.nativeRef;
+    if (
+      !derivedNativeRef ||
+      derivedNativeRef.nativeSessionId === nativeSessionRef.nativeSessionId
+    ) {
+      throw new Error("External Fork did not create a distinct Native Session");
+    }
+    const snapshot = await session.readSnapshot();
+    if (!snapshot.ok) {
+      await session.close().catch(() => undefined);
+      await repository.removeProvisional(provisional.hostThreadId).catch(() => undefined);
+      return { ok: false, error: mapExternalThreadHarnessError(snapshot.error, "read") };
+    }
+    const aligned = await repository.commitDerivedSnapshot(
+      provisional,
+      derivedNativeRef as NativeSessionRef,
+      snapshot.value,
+    );
+    const thread = externalThreadValue({
+      record: aligned.record,
+      turns: aligned.turns,
+      sessionId: source.sessionId,
+    });
+    const derived = runtime.register({
+      record: aligned.record,
+      session,
+      sessionId: source.sessionId,
+      thread,
+      turns: aligned.turns,
+      ...(snapshot.value.state ? { restoredState: snapshot.value.state } : {}),
+      ...(inheritedPermissionModeId
+        ? { requestedPermissionModeId: inheritedPermissionModeId }
+        : {}),
+    });
+    return {
+      ok: true,
+      derived,
+      thread,
+      responseThread: fork.excludeTurns ? { ...thread, turns: [] } : thread,
+    };
+  } catch {
+    runtime.remove(provisional.hostThreadId);
+    await session.close().catch(() => undefined);
+    await repository.removeProvisional(provisional.hostThreadId).catch(() => undefined);
+    return {
+      ok: false,
+      error: { code: -32081, message: "External Fork could not be persisted" },
+    };
+  }
+}
+
+/**
+ * A fork continues the source conversation, so it keeps the source's current Permission Mode
+ * instead of silently dropping back to the Harness default. Failure is non-fatal: the derived
+ * Session then keeps whatever mode the Harness opened it with.
+ */
+async function inheritSourcePermissionMode(
+  source: ExternalThread,
+  session: HarnessSession,
+): Promise<HarnessPermissionModeId | undefined> {
+  const sourceModeId =
+    source.stateObserver.state.effectivePermissionModeId ?? source.requestedPermissionModeId;
+  if (!sourceModeId) return undefined;
+  const configuration = session.capabilities.configuration;
+  if (!configuration.selectPermissionMode || permissionModeFixedAtCreate(configuration)) {
+    return undefined;
+  }
+  try {
+    const selected = await session.execute({
+      type: "permissionMode.select",
+      permissionModeId: sourceModeId,
+    });
+    return selected.ok ? sourceModeId : undefined;
+  } catch {
+    return undefined;
+  }
+}

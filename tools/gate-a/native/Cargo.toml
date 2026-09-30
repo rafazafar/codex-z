@@ -1,0 +1,24 @@
+[package]
+name = "codex-z-gate-a-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+gate-tools = ["dep:codex-z-platform", "dep:codex-z-shim"]
+
+[[bin]]
+name = "codex-z-probe"
+path = "src/bin/codex-z-probe.rs"
+required-features = ["gate-tools"]
+
+[[bin]]
+name = "codex-z-shim-probe"
+path = "src/bin/codex-z-shim-probe.rs"
+required-features = ["gate-tools"]
+
+[dependencies]
+codex-z-platform = { path = "../../../crates/platform", optional = true }
+codex-z-shim = { path = "../../../crates/shim", optional = true }

@@ -1,0 +1,28 @@
+# DSH message revision, recovery, and native stop confirmation
+
+The Adapter was validated on DSH `0.1.2-rc.1`, `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.5-rc.3`, and `0.1.7-rc.1` using the codex-z managed, authenticated Web Remote to create, resume, and Fork native Sessions. rc2 source-protocol audit, V4 routing regression, and repository automated checks added `0.1.7-rc.2` to supported and validated version lists. Modern versions below `0.1.7-rc.1` attempt V3; valid SemVer versions at or above it attempt V4. rc2 has not passed the real CLI lifecycle Gate. Legacy protocol support was removed.
+
+Last-message revision uses native history operations to roll back only the final Turn. Fork verifies inheritance through native seed markers and the checked history prefix, without modifying the source. Recovery reads the public history API and preserves Native Session ID and native configuration semantics.
+
+015 native Fork can inherit pending input for the next Turn. Before accepting a child Session, the Adapter removes only pending work proven to come from the inherited prefix, using native queue APIs, then reads back confirmation. This prevents cold recovery from rerunning rolled-back input. Unknown origin or missing confirmation causes an explicit failure.
+
+| DSH version | Native history and streaming | Checkpoint |
+| --- | --- | --- |
+| `0.1.2-rc.1` | V0 log, persisted Assistant chunk | `turn-end:` |
+| `0.1.5-rc.1` / `0.1.5-rc.2` / `0.1.5-rc.3` | V3 log, separate Assistant baseline/start/chunk/end and persisted message/attempt settlement | `v3-turn-end:`, with exact-version locator |
+| `0.1.7-rc.1` | V4 log, adds `developer/message`, V4 surface refs, image offload, workspace changes, V4 Assistant block validation, and `forked` synthetic closer | `v4-turn-end:`, with exact-version locator |
+| `0.1.7-rc.2` | Retains V4 log and Remote / Fork semantics; current evidence is source audit, V4 routing regression, and repository automated checks | `v4-turn-end:`, with exact-version locator |
+
+V3 system messages participate in native surface references and replacement, but are not shown as user Turns. Assistant reconnection deduplicates through native baseline and persisted settlement. Checkpoint formats cannot be mixed: native DSH migration can renumber seq. Old checkpoints cannot be used for V3 Fork/rollback. Before modifying native sessions, the Adapter rejects cross-format checkpoints and those that do not match the current CLI version. V3 Session Refs can attempt recovery after upgrade, but still require actual history parsing. codex-z does not migrate native files or guarantee that old DSH can open new logs.
+
+015 text deltas appear live before final-message persistence. If DSH abandons or retries generation, previously displayed partial output is marked cancelled and the new attempt appears separately. History rereads retain only visible messages persisted by DSH. Failed-attempt text is not joined into successful answers.
+
+Visible native thinking deltas from DSH V0/V3/V4 also appear live. Trailing stream newlines are buffered until the final message determines authoritative text. A difference only in trailing newline count does not cancel the temporary thinking Item. Codex thinking previews and `thinking` cards omit trailing newlines but retain paragraph breaks; native history is not modified. When final messages revise, remove, or abandon temporary thinking, the old Item is marked cancelled. New final Items show only authoritative native content. Reconnection deduplicates by native Assistant baseline; cold recovery reads final thinking only from persisted DSH history. A `pwsh` Tool with nonempty `command` uses an expandable command box with the complete command and bounded output. Without a valid command it remains a normal Tool.
+
+Closing an active Session first requests cancellation, then waits for its associated native `turn/end`. An unassociated request cannot be hidden by another autonomous Turn's terminal state. A fault before close means local cleanup cannot prove native stop. Acceptance acknowledgements that arrive during close still receive a terminal state. If stop cannot be confirmed, close is explicitly rejected.
+
+After normal 015 close and Fork queue cleanup, authenticated native `HEAD /api/session.export` also waits for log persistence without downloading the log. Native acknowledgements and in-memory history reads do not prove persistence. This step must not be omitted before ending a managed Windows process. Persistence-confirmation failures are reported explicitly.
+
+A lifecycle Gate uses a local SSE model, isolated temporary data, and real CLI: `tools/gate-dsh/lifecycle.real.test.mjs`. Select the native command with `CODEX_Z_DSH_REAL_COMMAND`; without it the Gate explicitly skips. The Gate passed for `0.1.5-rc.3` and `0.1.7-rc.1`. See [version validation](dsh-015rc1-validation.md) for Windows, Node.js `v24.11.0`, Vitest `4.1.10`, commands, durations, and unverified areas.
+
+The Gate covers streaming, cancellation, empty/retained-history edits, cold recovery, default configuration preservation, unchanged source history, and active close. Both earlier supported versions ran this Gate on Windows. rc.2 has not passed the real CLI lifecycle Gate; its current evidence is rc2 source-protocol audit, V4 routing regression, and repository automated checks, which added it to the validated list. Default-configuration checks do not prove arbitrary non-default settings, independent third-party clients, or arbitrary background-tool termination. See [version validation](dsh-015rc1-validation.md) for commands, coverage, and installation limits.

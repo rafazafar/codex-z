@@ -1,0 +1,244 @@
+import { describe, expect, it } from "vitest";
+import type { HostApprovalInteraction } from "@codex-z/harness-adapter";
+import { hostInteractionIdSchema, hostTurnIdSchema } from "@codex-z/shared-contracts";
+import { ElicitRequestFormParamsSchema } from "@modelcontextprotocol/sdk/types.js";
+
+import { CodexTurnProjector, projectCodexApprovalRequest } from "../src/index.js";
+
+const interaction = (
+  overrides: Partial<HostApprovalInteraction> = {},
+): HostApprovalInteraction => ({
+  type: "approval",
+  interactionId: hostInteractionIdSchema.parse("approval-1"),
+  turnId: hostTurnIdSchema.parse("turn-1"),
+  title: "Allow Claude Code native action?",
+  description: "One-shot native Harness approval",
+  subject: { type: "nativeAction" },
+  actions: [
+    { id: "allow", label: "Allow once", effect: "allowOnce" },
+    { id: "reject", label: "Deny", effect: "deny" },
+  ],
+  ...overrides,
+});
+
+describe("Codex native Approval wire projection", () => {
+  it("keeps multiple native scopes as explicit form choices with one-shot defaults", () => {
+    const approval = interaction({
+      actions: [
+        { id: "once", label: "Allow once", effect: "allowOnce" },
+        { id: "no", label: "Deny", effect: "deny" },
+        { id: "exact", label: "Save for workspace: git add file.txt", effect: "allowAlways" },
+        { id: "prefix", label: "Save for user: git add *", effect: "allowAlways" },
+        { id: "deny-persist", label: "Deny for user: git *", effect: "deny" },
+      ],
+    });
+    const projected = projectCodexApprovalRequest({
+      threadId: "thread-1",
+      interaction: approval,
+      serverName: "Kiro CLI",
+    });
+    expect(() => ElicitRequestFormParamsSchema.parse(projected.request.params)).not.toThrow();
+    expect(projected.request).toMatchObject({
+      params: {
+        requestedSchema: {
+          properties: {
+            actionId: {
+              default: "once",
+              oneOf: approval.actions.map(({ id, label }) => ({ const: id, title: label })),
+            },
+          },
+          required: ["actionId"],
+        },
+      },
+    });
+    expect(projected.request.params).not.toHaveProperty("_meta.codex_approval_kind");
+    for (const { id } of approval.actions) {
+      expect(projected.parseResponse({ action: "accept", content: { actionId: id } })).toEqual({
+        type: "approval",
+        actionId: id,
+      });
+    }
+    expect(projected.parseResponse({ action: "cancel" })).toEqual({
+      type: "approval",
+      actionId: "no",
+    });
+    for (const result of [
+      { action: "accept" },
+      { action: "accept", content: { actionId: "undeclared" } },
+      { action: "accept", content: { actionId: "once", resource: "*" } },
+      { action: "accept", content: { actionId: "once" }, _meta: { persist: "always" } },
+      { action: "decline", content: { actionId: "exact" } },
+    ])
+      expect(() => projected.parseResponse(result)).toThrow();
+  });
+
+  it("projects the reviewed MCP Tool Approval shape and exact one-shot responses", () => {
+    const projected = projectCodexApprovalRequest({
+      threadId: "thread-1",
+      interaction: interaction(),
+      serverName: "Claude Code",
+    });
+
+    expect(projected.request).toEqual({
+      method: "mcpServer/elicitation/request",
+      params: {
+        serverName: "Claude Code",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        mode: "form",
+        message: "Allow Claude Code native action?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          reason: "One-shot native Harness approval",
+        },
+      },
+    });
+    expect(projected.parseResponse({ action: "accept", content: {}, _meta: null })).toEqual({
+      type: "approval",
+      actionId: "allow",
+    });
+    expect(projected.parseResponse({ action: "decline", content: null, _meta: null })).toEqual({
+      type: "approval",
+      actionId: "reject",
+    });
+    expect(projected.parseResponse({ action: "cancel" })).toEqual(projected.denyResponse);
+  });
+
+  it("projects and parses only declared Session and always scopes", () => {
+    const projected = projectCodexApprovalRequest({
+      threadId: "thread-1",
+      interaction: interaction({
+        actions: [
+          { id: "allow", label: "Allow once", effect: "allowOnce" },
+          {
+            id: "session",
+            label: "Allow this conversation",
+            effect: "allowForSession",
+          },
+          { id: "always", label: "Always allow", effect: "allowAlways" },
+          { id: "reject", label: "Deny", effect: "deny" },
+        ],
+      }),
+      serverName: "Claude Code",
+    });
+
+    expect(projected.request).toMatchObject({
+      params: { _meta: { persist: ["session", "always"] } },
+    });
+    expect(
+      projected.parseResponse({
+        action: "accept",
+        content: {},
+        _meta: { persist: "session" },
+      }),
+    ).toEqual({ type: "approval", actionId: "session" });
+    expect(
+      projected.parseResponse({
+        action: "accept",
+        content: {},
+        _meta: { persist: "always" },
+      }),
+    ).toEqual({ type: "approval", actionId: "always" });
+  });
+
+  it("rejects malformed, undeclared, and unreviewed responses", () => {
+    const projected = projectCodexApprovalRequest({
+      threadId: "thread-1",
+      interaction: interaction(),
+      serverName: "Claude Code",
+    });
+
+    expect(() => projected.parseResponse({})).toThrow("missing action");
+    expect(() => projected.parseResponse({ action: "allowForSession" })).toThrow(
+      "unsupported action",
+    );
+    expect(() =>
+      projected.parseResponse({ action: "accept", content: { unexpected: true } }),
+    ).toThrow("non-empty accepted content");
+    expect(() =>
+      projected.parseResponse({
+        action: "accept",
+        content: {},
+        _meta: { persist: "session" },
+      }),
+    ).toThrow("undeclared session scope");
+    expect(() =>
+      projected.parseResponse({ action: "accept", _meta: { persist: "future" } }),
+    ).toThrow("malformed persist metadata");
+    expect(() => projected.parseResponse({ action: "accept", extra: true })).toThrow(
+      "unreviewed fields",
+    );
+  });
+
+  it("requires exactly one bounded Allow Once and Deny action", () => {
+    expect(() =>
+      projectCodexApprovalRequest({
+        threadId: "thread-1",
+        interaction: interaction({
+          actions: [{ id: "deny", label: "Deny", effect: "deny" }],
+        }),
+        serverName: "Claude Code",
+      }),
+    ).toThrow("exactly one allowOnce action");
+    expect(() =>
+      projectCodexApprovalRequest({
+        threadId: "thread-1",
+        interaction: interaction({ title: "   " }),
+        serverName: "Claude Code",
+      }),
+    ).toThrow("title must contain at least 1 character");
+  });
+
+  it("truncates long display text instead of rejecting the Approval", () => {
+    const command = `Execute \`${"x".repeat(200)}\``;
+    const projected = projectCodexApprovalRequest({
+      threadId: "thread-1",
+      interaction: interaction({ title: command, description: "y".repeat(600) }),
+      serverName: "Claude Code",
+    });
+    const params = projected.request.params as { message: string; _meta: { reason: string } };
+    expect(params.message).toHaveLength(150);
+    expect(params.message.endsWith("…")).toBe(true);
+    expect(params.message.startsWith("Execute `xxx")).toBe(true);
+    expect(params._meta.reason).toHaveLength(500);
+    expect(params._meta.reason.endsWith("…")).toBe(true);
+  });
+
+  it("keeps display text at the limit unchanged", () => {
+    const projected = projectCodexApprovalRequest({
+      threadId: "thread-1",
+      interaction: interaction({ title: "x".repeat(150) }),
+      serverName: "Claude Code",
+    });
+    const params = projected.request.params as { message: string };
+    expect(params.message).toBe("x".repeat(150));
+  });
+
+  it("tracks Approval lifecycle without fabricating a Tool or File Change Item", () => {
+    const projector = new CodexTurnProjector({
+      threadId: "thread-1",
+      turnId: hostTurnIdSchema.parse("turn-1"),
+      cwd: "/synthetic",
+      startedAtMs: 1_000,
+    });
+    projector.project({ type: "turn.started", turnId: hostTurnIdSchema.parse("turn-1") });
+
+    expect(projector.projectApproval(interaction(), "Claude Code").messages).toEqual([]);
+    expect(
+      projector.project({
+        type: "interaction.closed",
+        interactionId: hostInteractionIdSchema.parse("approval-1"),
+        turnId: hostTurnIdSchema.parse("turn-1"),
+        reason: "responded",
+      }).messages,
+    ).toEqual([]);
+    const completed = projector.project({
+      type: "turn.completed",
+      turnId: hostTurnIdSchema.parse("turn-1"),
+      outcome: { status: "succeeded" },
+    });
+    expect(completed.completedTurn).toMatchObject({ items: [] });
+    expect(completed.messages.some(({ method }) => method === "item/started")).toBe(false);
+  });
+});

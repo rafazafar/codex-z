@@ -1,0 +1,37 @@
+name: Question
+description: Ask a question or request help.
+title: "[Question] "
+labels: [question]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Other / Unknown
+        - Desktop / Renderer
+        - Harness Adapter
+        - Thread / History
+        - Accounts / Usage
+        - Install / Update
+        - Remote
+        - Documentation
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the question. Do not include credentials or sensitive personal information.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Which documents did you read and what did you try? State if you have not tried anything yet.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: For runtime problems, give the codex-z / Desktop / Harness versions, OS, installation method, and connection method.

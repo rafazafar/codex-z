@@ -1,0 +1,29 @@
+{
+  "name": "@codex-z/host-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "build:release": "node scripts/build-release.mjs"
+  },
+  "dependencies": {
+    "@codex-z/desktop-control": "0.0.0",
+    "@codex-z/harness-adapter": "0.0.0",
+    "@codex-z/harness-broker": "0.0.0",
+    "@codex-z/mapping-store": "0.0.0",
+    "@codex-z/protocol-core": "0.0.0",
+    "@codex-z/shared-contracts": "0.0.0",
+    "@codex-z/update-manager": "0.0.0",
+    "ws": "8.21.3"
+  }
+}

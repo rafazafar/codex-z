@@ -1,0 +1,124 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { RENDERER_PROBE_AGENTS, validateProbeStatus } from "../../tools/renderer-binding/run.mjs";
+
+const root = path.resolve(import.meta.dirname, "../..");
+
+async function source(relative) {
+  return readFile(path.join(root, relative), "utf8");
+}
+
+describe("production Renderer release chain", () => {
+  it("uses the fixed production Agent list without a development enable switch", async () => {
+    const [productionEntry, probeEntry, installer, agentState, controller] = await Promise.all([
+      source("packages/renderer-extension/src/production-entry.ts"),
+      source("packages/renderer-extension/src/probe-entry.ts"),
+      source("packages/renderer-extension/src/install-renderer-binding.ts"),
+      source("packages/renderer-extension/src/agent-selection-state.ts"),
+      source("packages/desktop-control/src/production-controller.ts"),
+    ]);
+
+    expect(agentState).toContain('"deepseek-harness",');
+    expect(agentState).toContain('"opencode",');
+    expect(agentState).toContain('"grok",');
+    expect(agentState).toContain('"antigravity",');
+    expect(agentState).toContain("DEFAULT_RENDERER_AGENTS = KNOWN_RENDERER_AGENTS");
+    const rendererAgents = agentState.match(/KNOWN_RENDERER_AGENTS = \[([^\]]+)\]/)[1];
+    const controllerAgents = controller.match(/enabledAgents: \[([^\]]+)\]/)[1];
+    expect([...controllerAgents.matchAll(/"([^"]+)"/g)].map((match) => match[1])).toEqual(
+      [...rendererAgents.matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+    );
+    expect(productionEntry).toContain("installRendererBinding(DEFAULT_RENDERER_AGENTS");
+    expect(productionEntry).toContain("__codexZProductionConfigV1");
+    expect(productionEntry).toContain('window.addEventListener("DOMContentLoaded"');
+    expect(productionEntry).toContain("document.documentElement && document.body");
+    expect(productionEntry).not.toContain("RendererConfiguration");
+    expect(probeEntry).toContain("installRendererBinding(DEFAULT_RENDERER_AGENTS)");
+    expect(probeEntry).not.toContain("enableClaudeCode");
+    expect(installer).toContain("installCurrentRendererAdapter");
+  });
+
+  it("keeps the Controller Agent list in sync with the production Renderer", async () => {
+    const [controller, agentState] = await Promise.all([
+      source("packages/desktop-control/src/production-controller.ts"),
+      source("packages/renderer-extension/src/agent-selection-state.ts"),
+    ]);
+    const agents = (text, pattern) => {
+      const block = text.match(pattern)?.[1];
+      if (!block) throw new Error(`Agent list not found: ${pattern}`);
+      return [...block.matchAll(/"([^"]+)"/g)].map(([, agent]) => agent);
+    };
+    const rendererAgents = agents(agentState, /KNOWN_RENDERER_AGENTS = \[([^\]]*)\]/);
+    const controllerAgents = agents(controller, /enabledAgents: \[([^\]]*)\]/);
+
+    expect(controllerAgents).toEqual(rendererAgents);
+  });
+
+  it("accepts Grok and Antigravity in renderer probe capabilities and selections", () => {
+    const status = validateProbeStatus({
+      version: 2,
+      mountedComposers: 1,
+      enabledAgents: [...RENDERER_PROBE_AGENTS],
+      selections: [{ composerId: "composer-grok", agent: "grok", phase: "draft" }],
+      adapter: { state: "ready", reason: "ready", modelUpdates: 0 },
+    });
+
+    expect(RENDERER_PROBE_AGENTS).toContain("opencode");
+    expect(RENDERER_PROBE_AGENTS).toContain("grok");
+    expect(RENDERER_PROBE_AGENTS).toContain("antigravity");
+    expect(status.selections).toEqual([
+      { composerId: "composer-grok", agent: "grok", phase: "draft" },
+    ]);
+    expect(() =>
+      validateProbeStatus({
+        ...status,
+        selections: [{ composerId: "composer-unknown", agent: "unknown", phase: "draft" }],
+      }),
+    ).toThrow("invalid selection");
+  });
+
+  it("builds the local audit entry without packaging it in production", async () => {
+    const [rendererBuild, auditEntry, releaseBuilder] = await Promise.all([
+      source("packages/renderer-extension/scripts/build.mjs"),
+      source("packages/renderer-extension/src/audit-entry.ts"),
+      source("scripts/release/prepare-payload.mjs"),
+    ]);
+
+    expect(rendererBuild).toContain("src/audit-entry.ts");
+    expect(rendererBuild).toContain("dist/contract-audit.js");
+    expect(auditEntry).toContain("__codexZContractAuditV1");
+    expect(releaseBuilder).not.toContain("contract-audit.js");
+  });
+
+  it("builds and packages executable production entries", async () => {
+    const [rendererBuild, releaseBuilder] = await Promise.all([
+      source("packages/renderer-extension/scripts/build.mjs"),
+      source("scripts/release/prepare-payload.mjs"),
+    ]);
+
+    expect(rendererBuild).toContain("src/production-entry.ts");
+    expect(rendererBuild).toContain("dist/production.js");
+    expect(releaseBuilder).toContain('dist", "production.js');
+    expect(releaseBuilder).toContain("desktop-controller.mjs");
+    expect(releaseBuilder).toContain('packageName: "lucide"');
+    expect(releaseBuilder).toContain("lucide-LICENSE.txt");
+    expect(releaseBuilder).not.toContain('dist", "index.js"');
+  });
+
+  it("requires Launcher consumption rather than file presence alone", async () => {
+    const [layout, launcher] = await Promise.all([
+      source("crates/launcher/src/installation_layout.rs"),
+      source("crates/launcher/src/main.rs"),
+    ]);
+
+    expect(layout).toContain("desktop_controller");
+    expect(layout).toContain("renderer_extension");
+    expect(launcher).toContain("--renderer-cdp-endpoint");
+    expect(launcher).toContain("--remote-debugging-port=");
+    expect(launcher).toContain("desktop_controller");
+    expect(launcher).toContain("renderer_extension");
+  });
+});

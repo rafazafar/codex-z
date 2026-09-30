@@ -1,0 +1,30 @@
+[package]
+name = "codex-z-shim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+test-utils = []
+
+[[bin]]
+name = "codex-z-shim"
+path = "src/main.rs"
+
+[[bin]]
+name = "codex-z-node-repl"
+path = "src/node_repl_main.rs"
+
+[[bin]]
+name = "fake-codex-cli"
+path = "tests/fixtures/fake-codex-cli.rs"
+required-features = ["test-utils"]
+
+[dependencies]
+codex-z-platform = { path = "../platform" }
+fs2 = "0.4.3"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+nix = { version = "0.31.3", features = ["process", "signal"] }
+signal-hook = "0.4.4"

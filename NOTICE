@@ -1,0 +1,13 @@
+codex-z
+
+This project is derived from codexhost (also published as codex-host),
+https://github.com/BytePioneer-AI/codex-host.
+The fork changes the project name, distribution identity, documentation,
+and maintenance location. This notice identifies source provenance; it
+does not imply endorsement by the original authors.
+
+This repository starts with a new Git history. The LGPL-3.0-only license is retained.
+Copyright and license notices for third-party material remain in their
+respective files. Imported development-skill provenance is recorded in
+.agents/skills/NOTICE.md. Release dependency licenses are in
+scripts/release/licenses/.

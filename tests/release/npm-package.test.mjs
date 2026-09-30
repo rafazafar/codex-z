@@ -1,0 +1,769 @@
+import { spawnSync } from "node:child_process";
+import {
+  chmod,
+  copyFile,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { describe, expect, it } from "vitest";
+
+import {
+  NPM_PACKAGE_NAME,
+  NPM_PLATFORM_PACKAGE_NAMES,
+  createNpmBinLauncherSource,
+  createNpmPackageManifest,
+  expectedNpmPackagePaths,
+  npmPackageCpu,
+  npmPackageOs,
+  npmPackCommand,
+  npmPlatformPackageName,
+  resolveRuntimeLicenseSource,
+  writeThirdPartyNotices,
+  npmReleaseBuildCommands,
+  npmTarballFileName,
+  parseNpmReleaseArguments,
+  validateNpmPackage,
+} from "../../scripts/release/prepare-npm.mjs";
+import {
+  createNpmMetaReadme,
+  createNpmMetaPackageManifest,
+  expectedNpmMetaPackagePaths,
+  validateNpmMetaPackage,
+} from "../../scripts/release/prepare-npm-meta.mjs";
+import { hostReleaseTargetId, releaseTarget } from "../../scripts/release/targets.mjs";
+
+async function temporaryDirectory() {
+  return mkdtemp(path.join(os.tmpdir(), "codex-z-npm-package-"));
+}
+
+async function createNpmPackageFixture(root, target) {
+  for (const relative of expectedNpmPackagePaths(target)) {
+    const absolute = path.join(root, ...relative.split("/"));
+    await mkdir(path.dirname(absolute), { recursive: true });
+    if (relative === "package.json") {
+      await writeFile(
+        absolute,
+        `${JSON.stringify(createNpmPackageManifest({ version: "0.1.0", target }), null, 2)}\n`,
+      );
+      continue;
+    }
+    await writeFile(absolute, `npm-package:${relative}\n`);
+  }
+}
+
+async function writeExecutable(filePath, contents) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, contents);
+  await chmod(filePath, 0o755);
+}
+
+async function createHomebrewNodeLayout(root) {
+  const brewPrefix = path.join(root, "opt", "homebrew");
+  const cellarNode = path.join(brewPrefix, "Cellar", "node", "26.7.0", "bin", "node");
+  const prefixNpm = path.join(brewPrefix, "lib", "node_modules", "npm", "bin", "npm-cli.js");
+  const libexecNpm = path.join(
+    brewPrefix,
+    "Cellar",
+    "node",
+    "26.7.0",
+    "libexec",
+    "lib",
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  await mkdir(path.dirname(cellarNode), { recursive: true });
+  try {
+    await link(process.execPath, cellarNode);
+  } catch {
+    await copyFile(process.execPath, cellarNode);
+    await chmod(cellarNode, 0o755);
+  }
+  await writeExecutable(prefixNpm, '#!/usr/bin/env node\nconsole.log("homebrew-prefix-npm");\n');
+  await writeExecutable(libexecNpm, '#!/usr/bin/env node\nconsole.log("homebrew-libexec-npm");\n');
+  await mkdir(path.join(brewPrefix, "bin"), { recursive: true });
+  await symlink(
+    path.relative(path.join(brewPrefix, "bin"), cellarNode),
+    path.join(brewPrefix, "bin", "node"),
+  );
+  await symlink(
+    path.relative(path.join(brewPrefix, "bin"), prefixNpm),
+    path.join(brewPrefix, "bin", "npm"),
+  );
+  return { brewPrefix, cellarNode, prefixNpm, libexecNpm };
+}
+
+async function createGlobalCodexZInstall(prefix) {
+  const platformPackage =
+    process.platform === "win32"
+      ? `@codex-z/cli-win32-${process.arch}`
+      : `@codex-z/cli-darwin-${process.arch}`;
+  const packageRoot = path.join(prefix, "lib", "node_modules", platformPackage);
+  const launcherPath = path.join(
+    prefix,
+    "lib",
+    "node_modules",
+    "@codex-z",
+    "cli",
+    "bin",
+    "codex-z.js",
+  );
+  const userBin = path.join(prefix, "bin", "codex-z");
+  await writeExecutable(launcherPath, createNpmBinLauncherSource({ version: "0.1.5" }));
+  await mkdir(path.dirname(userBin), { recursive: true });
+  await symlink(path.relative(path.dirname(userBin), launcherPath), userBin);
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(
+    path.join(packageRoot, "package.json"),
+    `${JSON.stringify({ name: platformPackage, version: "0.1.5" })}\n`,
+  );
+  const executableSuffix = process.platform === "win32" ? ".exe" : "";
+  for (const relative of [
+    path.join("bin", `codex-z${executableSuffix}`),
+    path.join("libexec", `codex-z-shim${executableSuffix}`),
+    path.join("app", "host-runtime.mjs"),
+    path.join("app", "desktop-controller.mjs"),
+    path.join("app", "renderer-extension.js"),
+  ]) {
+    await writeExecutable(path.join(packageRoot, relative), `fixture:${relative}\n`);
+  }
+  return { launcherPath, userBin, packageRoot };
+}
+
+function spawnCodexZ(nodePath, launcherPath, args, extraEnv = {}) {
+  const environment = { ...process.env, ...extraEnv };
+  delete environment.npm_execpath;
+  delete environment.HOMEBREW_PREFIX;
+  if (extraEnv.PATH === undefined) environment.PATH = path.dirname(nodePath);
+  return spawnSync(nodePath, [launcherPath, ...args], {
+    encoding: "utf8",
+    env: environment,
+    windowsHide: true,
+  });
+}
+
+async function createNpmMetaPackageFixture(root) {
+  for (const relative of expectedNpmMetaPackagePaths()) {
+    const absolute = path.join(root, ...relative.split("/"));
+    await mkdir(path.dirname(absolute), { recursive: true });
+    if (relative === "package.json") {
+      await writeFile(
+        absolute,
+        `${JSON.stringify(createNpmMetaPackageManifest({ version: "0.1.0" }), null, 2)}\n`,
+      );
+    } else if (relative === "bin/codex-z.js") {
+      await writeFile(absolute, createNpmBinLauncherSource({ version: "0.1.0" }));
+    } else {
+      await writeFile(absolute, `npm-meta-package:${relative}\n`);
+    }
+  }
+}
+
+async function createLauncherLifecycleFixture(root, platform) {
+  const launcherPath = path.join(root, "node_modules", "@codex-z", "cli", "bin", "codex-z.js");
+  const platformPackage = `@codex-z/cli-${platform}-x64`;
+  const platformRoot = path.join(root, "node_modules", ...platformPackage.split("/"));
+  const executableSuffix = platform === "win32" ? ".exe" : "";
+  const npmCliPath = path.join(root, "npm-cli.js");
+  const preloadPath = path.join(root, "launcher-child-preload.mjs");
+
+  await writeExecutable(launcherPath, createNpmBinLauncherSource({ version: "0.1.0" }));
+  await mkdir(platformRoot, { recursive: true });
+  await writeFile(
+    path.join(platformRoot, "package.json"),
+    `${JSON.stringify({ name: platformPackage, version: "0.1.0" })}\n`,
+  );
+  for (const relative of [
+    path.join("bin", `codex-z${executableSuffix}`),
+    path.join("libexec", `codex-z-shim${executableSuffix}`),
+    path.join("app", "host-runtime.mjs"),
+    path.join("app", "desktop-controller.mjs"),
+    path.join("app", "renderer-extension.js"),
+  ]) {
+    await writeExecutable(path.join(platformRoot, relative), `fixture:${relative}\n`);
+  }
+  await writeFile(npmCliPath, "// fixture npm CLI\n");
+  await writeFile(
+    preloadPath,
+    `import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+import { PassThrough } from "node:stream";
+
+Object.defineProperty(process, "platform", {
+  configurable: true,
+  value: process.env.CODEX_Z_TEST_PLATFORM,
+});
+Object.defineProperty(process, "arch", {
+  configurable: true,
+  value: "x64",
+});
+if (process.env.CODEX_Z_TEST_TTY === "1") {
+  Object.defineProperty(process.stdout, "isTTY", {
+    configurable: true,
+    value: true,
+  });
+}
+
+childProcess.spawn = () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  setTimeout(() => child.stdout.write("startup:" + "x".repeat(1024 * 1024) + "rea"), 10);
+  setTimeout(() => child.stdout.write("dy\\n"), 20);
+  setTimeout(() => child.emit("exit", 7, null), 80);
+  return child;
+};
+syncBuiltinESMExports();
+`,
+  );
+
+  return { launcherPath, npmCliPath, preloadPath, platformRoot };
+}
+
+async function runLauncherLifecycle(
+  platform,
+  { locale = "en_US.UTF-8", noColor = false, tty = false, platformVersion = "0.1.0" } = {},
+) {
+  const root = await temporaryDirectory();
+  try {
+    const { launcherPath, npmCliPath, preloadPath, platformRoot } =
+      await createLauncherLifecycleFixture(root, platform);
+    await writeFile(
+      path.join(platformRoot, "package.json"),
+      JSON.stringify({ name: `@codex-z/cli-${platform}-x64`, version: platformVersion }),
+    );
+    const environment = {
+      ...process.env,
+      CODEX_Z_STARTUP_TRACE: "1",
+      CODEX_Z_TEST_PLATFORM: platform,
+      CODEX_Z_TEST_TTY: tty ? "1" : "0",
+      LC_ALL: locale,
+      npm_execpath: npmCliPath,
+    };
+    if (tty) environment.TERM = "xterm-256color";
+    if (noColor) environment.NO_COLOR = "1";
+    else delete environment.NO_COLOR;
+    return spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preloadPath).href, launcherPath],
+      {
+        encoding: "utf8",
+        env: environment,
+        timeout: 2_000,
+        windowsHide: true,
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function runGeneratedWrapperLifecycle(platform, userArguments, exitCodes) {
+  const root = await temporaryDirectory();
+  try {
+    const { launcherPath, npmCliPath } = await createLauncherLifecycleFixture(root, platform);
+    const preloadPath = path.join(root, "remote-broker-preload.mjs");
+    const callsPath = path.join(root, "spawn-calls.jsonl");
+    await writeFile(
+      preloadPath,
+      `import childProcess from "node:child_process";
+import { appendFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
+
+Object.defineProperty(process, "platform", { configurable: true, value: process.env.CODEX_Z_TEST_PLATFORM });
+Object.defineProperty(process, "arch", { configurable: true, value: "x64" });
+const exitCodes = JSON.parse(process.env.CODEX_Z_TEST_EXIT_CODES);
+let call = 0;
+childProcess.spawn = (command, args, options) => {
+  appendFileSync(process.env.CODEX_Z_TEST_CALLS, JSON.stringify({
+    command,
+    args,
+    stdoutFd: Array.isArray(options?.stdio) ? options.stdio[1]?.fd : null,
+  }) + "\\n");
+  const child = new EventEmitter();
+  const exitCode = exitCodes[call++] ?? 1;
+  setTimeout(() => child.emit("exit", exitCode, null), 5);
+  return child;
+};
+syncBuiltinESMExports();
+`,
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preloadPath).href, launcherPath, ...userArguments],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CODEX_Z_TEST_PLATFORM: platform,
+          CODEX_Z_TEST_CALLS: callsPath,
+          CODEX_Z_TEST_EXIT_CODES: JSON.stringify(exitCodes),
+          npm_execpath: npmCliPath,
+        },
+        timeout: 2_000,
+        windowsHide: true,
+      },
+    );
+    const calls = (await readFile(callsPath, "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    return { result, calls };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+describe("npm package release", () => {
+  it("maps the current host to a release target id", () => {
+    expect(hostReleaseTargetId("darwin", "arm64")).toBe("macos-arm64");
+    expect(hostReleaseTargetId("darwin", "x64")).toBe("macos-x64");
+    expect(hostReleaseTargetId("win32", "x64")).toBe("windows-x64");
+    expect(hostReleaseTargetId("win32", "arm64")).toBe("windows-arm64");
+    expect(hostReleaseTargetId("linux", "x64")).toBe("linux-x64");
+    expect(hostReleaseTargetId("linux", "arm64")).toBe("linux-arm64");
+  });
+
+  it("defaults the npm release target to the current host", () => {
+    const parsed = parseNpmReleaseArguments([], {
+      hostPlatform: "darwin",
+      hostArch: "arm64",
+    });
+    expect(parsed.help).toBe(false);
+    expect(parsed.target.id).toBe("macos-arm64");
+    expect(parsed.pack).toBe(false);
+    expect(parsed.skipBuild).toBe(false);
+    expect(parsed.version).toBeUndefined();
+  });
+
+  it("parses npm release options", () => {
+    const parsed = parseNpmReleaseArguments(
+      ["--target", "macos-arm64", "--version", "0.1.0", "--pack", "--skip-build"],
+      { hostPlatform: "darwin", hostArch: "arm64" },
+    );
+    expect(parsed.target.id).toBe("macos-arm64");
+    expect(parsed.version).toBe("0.1.0");
+    expect(parsed.pack).toBe(true);
+    expect(parsed.skipBuild).toBe(true);
+  });
+
+  it("rejects cross-operating-system npm targets", () => {
+    expect(() =>
+      parseNpmReleaseArguments(["--target", "windows-x64"], {
+        hostPlatform: "darwin",
+        hostArch: "arm64",
+      }),
+    ).toThrow("requires host platform");
+  });
+
+  it("builds the same Rust and TypeScript inputs as the installer channel", () => {
+    const commands = npmReleaseBuildCommands(releaseTarget("macos-arm64"));
+    expect(commands.map((command) => command.label)).toEqual([
+      "TypeScript build",
+      "Renderer build",
+      "Rust release build",
+    ]);
+    expect(commands.at(-1).args).toContain("codex-z-launcher");
+    expect(commands.at(-1).args).toContain("codex-z-shim");
+    expect(commands.at(-1).args).toContain("codex-z-updater");
+    expect(commands.at(-1).args).not.toContain("codex-z-platform");
+  });
+
+  it("runs npm pack through npm_execpath on Windows", () => {
+    expect(
+      npmPackCommand("win32", { npm_execpath: "C:\\npm\\npm-cli.js" }, "C:\\node.exe"),
+    ).toEqual({
+      command: "C:\\node.exe",
+      args: ["C:\\npm\\npm-cli.js", "pack"],
+    });
+    expect(npmPackCommand("darwin", {}, "/usr/bin/node")).toEqual({
+      command: "npm",
+      args: ["pack"],
+    });
+  });
+
+  it("generates SDK notices from repository license assets", async () => {
+    const root = process.cwd();
+    const output = await temporaryDirectory();
+    try {
+      await writeThirdPartyNotices(root, output);
+      const notice = await readFile(path.join(output, "THIRD_PARTY_NOTICES.txt"), "utf8");
+      expect(await readFile(path.join(output, "LICENSE"), "utf8")).toContain(
+        "GNU LESSER GENERAL PUBLIC LICENSE",
+      );
+      expect(await readFile(path.join(output, "NOTICE"), "utf8")).toContain("codex-z");
+      const license = await readFile(
+        path.join(output, "licenses/OpenCode-SDK-LICENSE.txt"),
+        "utf8",
+      );
+      expect(
+        resolveRuntimeLicenseSource(root, {
+          packageName: "@opencode-ai/sdk",
+          source: "scripts/release/licenses/opencode-ai-sdk-1.18.25-MIT.txt",
+        }),
+      ).toBe(path.join(root, "scripts/release/licenses/opencode-ai-sdk-1.18.25-MIT.txt"));
+      for (const name of ["Qoder", "QoderCN"]) {
+        const licensePath = `licenses/${name}-Agent-SDK-LICENSE.txt`;
+        expect(notice).toContain(licensePath);
+        expect(await readFile(path.join(output, licensePath), "utf8")).toContain(
+          "Qoder Product Service Terms",
+        );
+      }
+      expect(notice).toContain("@qoder-ai/qoder-agent-sdk");
+      expect(notice).toContain("@qodercn-ai/qodercn-agent-sdk");
+      expect(notice).toContain("@opencode-ai/sdk");
+      expect(notice).toContain("@opencode/client");
+      expect(
+        await readFile(path.join(output, "licenses/OpenCode-v2-Client-LICENSE.txt"), "utf8"),
+      ).toContain("MIT License");
+      expect(notice).toContain("licenses/OpenCode-SDK-LICENSE.txt");
+      expect(license).toContain("Copyright (c) 2025 opencode");
+    } finally {
+      await rm(output, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes a scoped platform package with platform constraints", () => {
+    const target = releaseTarget("macos-arm64");
+    const manifest = createNpmPackageManifest({ version: "0.1.0", target });
+    expect(manifest.name).toBe("@codex-z/cli-darwin-arm64");
+    expect(npmPlatformPackageName(target)).toBe(manifest.name);
+    expect(manifest.private).toBeUndefined();
+    expect(manifest.bin).toBeUndefined();
+    expect(manifest.os).toEqual(npmPackageOs(target));
+    expect(manifest.cpu).toEqual(npmPackageCpu(target));
+    expect(manifest.engines.node).toBe(">=22");
+    expect(manifest.publishConfig.access).toBe("public");
+    expect(manifest.files).toEqual([
+      "bin/**",
+      "libexec/**",
+      "app/**",
+      "licenses/**",
+      "README.md",
+      "THIRD_PARTY_NOTICES.txt",
+      "LICENSE",
+      "NOTICE",
+    ]);
+  });
+
+  it("publishes one meta package with exact optional platform dependencies", () => {
+    const manifest = createNpmMetaPackageManifest({ version: "0.1.0" });
+    expect(manifest.name).toBe(NPM_PACKAGE_NAME);
+    expect(manifest.bin["codex-z"]).toBe("bin/codex-z.js");
+    expect(manifest.os).toBeUndefined();
+    expect(manifest.cpu).toBeUndefined();
+    expect(manifest.optionalDependencies).toEqual(
+      Object.fromEntries(Object.values(NPM_PLATFORM_PACKAGE_NAMES).map((name) => [name, "0.1.0"])),
+    );
+  });
+
+  it("injects package resources when the user runs codex-z with no args", () => {
+    const source = createNpmBinLauncherSource({ version: "0.1.0" });
+    expect(source).toContain('"darwin-arm64": "@codex-z/cli-darwin-arm64"');
+    expect(source).toContain('"linux-x64": "@codex-z/cli-linux-x64"');
+    expect(source).toContain('"linux-arm64": "@codex-z/cli-linux-arm64"');
+    expect(source).toContain("require.resolve");
+    expect(source).toContain("--omit=optional");
+    expect(source).toContain('launchArguments = ["launch"]');
+    expect(source).toContain('extras.push("--node", process.execPath)');
+    expect(source).toContain('extras.push("--shim", shim)');
+    expect(source).toContain('extras.push("--host-runtime", hostRuntime)');
+    expect(source).toContain('extras.push("--desktop-controller", desktopController)');
+    expect(source).toContain('extras.push("--renderer", rendererExtension)');
+    expect(source).toContain('if (launchArguments?.[0] === "launch")');
+    expect(source).toContain('userArguments[0] === "remote"');
+    expect(source).toContain('userArguments[0] === "broker"');
+    expect(source).toContain("brokerArguments = userArguments.slice(1)");
+    expect(source).toContain('"--node", process.execPath, "--host-runtime", hostRuntime');
+    expect(source).toContain('remoteArguments[0] === "install"');
+    expect(source).toContain('remoteArguments[0] === "uninstall"');
+    expect(source).toContain('runNativeBroker("install"');
+    expect(source).toContain('runNativeBroker("uninstall"');
+    expect(source).toContain('userArguments[0] === "delegate"');
+    expect(source).toContain('userArguments[0] === "thread"');
+    expect(source).toContain('"--codex-z-delegation-cli"');
+    expect(source).toContain("CODEX_Z_CLI_PATH");
+    expect(source).toContain('"--codex-z-remote"');
+    expect(source).toContain('"--host-runtime", hostRuntime');
+    expect(source).toContain('stdio: ["ignore", "pipe", "inherit"]');
+    expect(source).toContain('const readyMarker = "ready\\n"');
+    expect(source).toContain("path.dirname(path.dirname(path.resolve(process.argv[1])))");
+    expect(source).not.toContain("runtime/node");
+  });
+
+  it("installs the Aqua broker after a successful macOS remote install", async () => {
+    const { result, calls } = await runGeneratedWrapperLifecycle(
+      "darwin",
+      ["remote", "install"],
+      [0, 0],
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].args).toEqual([
+      "broker",
+      "install",
+      "--node",
+      process.execPath,
+      "--host-runtime",
+      expect.stringMatching(/host-runtime\.mjs$/u),
+    ]);
+  });
+
+  it("reports a macOS broker status failure after remote status succeeds", async () => {
+    const { result, calls } = await runGeneratedWrapperLifecycle(
+      "darwin",
+      ["remote", "status"],
+      [0, 9],
+    );
+
+    expect(result.status).toBe(9);
+    expect(calls[1].args.slice(0, 2)).toEqual(["broker", "status"]);
+    expect(calls[1].stdoutFd).toBe(2);
+  });
+
+  it("does not manage an Aqua broker for Linux remote installs", async () => {
+    const { result, calls } = await runGeneratedWrapperLifecycle(
+      "linux",
+      ["remote", "install"],
+      [0],
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not install the Aqua broker when remote installation fails", async () => {
+    const { result, calls } = await runGeneratedWrapperLifecycle(
+      "darwin",
+      ["remote", "install"],
+      [7],
+    );
+
+    expect(result.status).toBe(7);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("injects the npm Node and Host Runtime into direct broker status", async () => {
+    const { result, calls } = await runGeneratedWrapperLifecycle(
+      "darwin",
+      ["broker", "status"],
+      [0],
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      "broker",
+      "status",
+      "--node",
+      process.execPath,
+      "--host-runtime",
+      expect.stringMatching(/host-runtime\.mjs$/u),
+    ]);
+  });
+
+  it("keeps Windows launcher supervision alive after the ready handshake", async () => {
+    const result = await runLauncherLifecycle("win32");
+    const readme = createNpmMetaReadme({ version: "0.1.0" });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(7);
+    expect(result.stderr).toContain("received Launcher ready");
+    expect(result.stderr).toContain("Launcher exited after ready");
+    expect(result.stdout).toBe("");
+    expect(readme).toContain("On Windows, the command remains attached until Codex Desktop exits");
+    expect(readme).toContain("process trees of completed commands");
+  });
+
+  it.each(["win32", "darwin", "linux"])(
+    "rejects mismatched platform payloads before spawning on %s",
+    async (platform) => {
+      for (const platformVersion of ["0.0.9", "0.2.0", null]) {
+        const result = await runLauncherLifecycle(platform, { platformVersion });
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("platform package version mismatch");
+        expect(result.stderr).toContain(`@codex-z/cli-${platform}-x64`);
+        expect(result.stderr).toContain("expected 0.1.0");
+        expect(result.stderr).toContain(
+          `npm install -g @codex-z/cli@0.1.0 @codex-z/cli-${platform}-x64@0.1.0`,
+        );
+        expect(result.stderr).not.toContain("received Launcher ready");
+        expect(result.stdout).not.toContain("startup:");
+      }
+    },
+  );
+
+  it.each(["darwin", "linux"])("returns after the ready handshake on %s", async (platform) => {
+    const result = await runLauncherLifecycle(platform);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("received Launcher ready");
+    expect(result.stderr).not.toContain("Launcher exited after ready");
+    expect(result.stdout).toBe("");
+  });
+
+  it("does not forward remote SSH bootstrap variables into a local Desktop launch", () => {
+    const source = createNpmBinLauncherSource({ version: "0.1.0" });
+    expect(source).toContain('import { homedir } from "node:os"');
+    expect(source).toContain('if (updateEnvironment.CODEX_Z_REMOTE_SSH_MANAGED === "1")');
+    expect(source).toContain("delete updateEnvironment[name]");
+    expect(source).toContain(
+      'updateEnvironment.CODEX_Z_DATA_DIR = path.join(homedir(), ".codex-z")',
+    );
+    const listStart = source.indexOf("const remoteSshBootstrapEnvironment = [");
+    const listEnd = source.indexOf("];", listStart);
+    expect(listStart).toBeGreaterThanOrEqual(0);
+    expect(listEnd).toBeGreaterThan(listStart);
+    const sanitizationSource = source.slice(listStart, listEnd);
+    for (const name of [
+      "CODEX_INSTALL_DIR",
+      "CODEX_Z_DATA_DIR",
+      "CODEX_Z_DEFAULT_AGENT",
+      "CODEX_Z_HOST_NODE_PATH",
+      "CODEX_Z_HOST_RUNTIME_PATH",
+      "CODEX_Z_REMOTE_SSH_MANAGED",
+      "CODEX_Z_STOCK_CODEX_PATH",
+    ]) {
+      expect(sanitizationSource).toContain(JSON.stringify(name));
+    }
+    expect(sanitizationSource).not.toContain("CODEX_Z_CLAUDE_COMMAND");
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "locates Homebrew npm when Node and npm do not share an official prefix",
+    async () => {
+      const root = await temporaryDirectory();
+      try {
+        const { brewPrefix, cellarNode } = await createHomebrewNodeLayout(root);
+        const { userBin } = await createGlobalCodexZInstall(brewPrefix);
+        const result = spawnCodexZ(cellarNode, userBin, ["--help"]);
+        expect(result.status).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toContain("usage:");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["--version", "-v"])("prints the npm package version for %s", async (option) => {
+    const root = await temporaryDirectory();
+    const launcherPath = path.join(root, "codex-z.mjs");
+    try {
+      await writeFile(launcherPath, createNpmBinLauncherSource({ version: "1.2.3" }));
+      const result = spawnSync(process.execPath, [launcherPath, option], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("1.2.3\n");
+      expect(result.stderr).toBe("");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("validates the npm package allowlist without an embedded Node runtime", async () => {
+    const root = await temporaryDirectory();
+    const target = releaseTarget("macos-arm64");
+    try {
+      await createNpmPackageFixture(root, target);
+      const paths = await validateNpmPackage({
+        packageRoot: root,
+        target,
+        root: "/repo/source",
+      });
+      expect(paths).toEqual(expectedNpmPackagePaths(target));
+      expect(paths).toContain("licenses/OpenCode-SDK-LICENSE.txt");
+      expect(paths).not.toContain("runtime/node");
+      expect(paths).toContain("bin/codex-z");
+      expect(paths).toContain("libexec/codex-z-shim");
+      expect(expectedNpmPackagePaths(releaseTarget("windows-x64"))).toContain(
+        "libexec/codex-z-node-repl.exe",
+      );
+      expect(paths).not.toContain("libexec/codex-z-node-repl");
+      expect(paths).toContain("libexec/codex-z-updater");
+      expect(paths).toContain("app/codex-z-distribution.json");
+      await mkdir(path.join(root, "runtime"), { recursive: true });
+      await writeFile(path.join(root, "runtime/node"), "unexpected");
+      await expect(
+        validateNpmPackage({ packageRoot: root, target, root: "/repo/source" }),
+      ).rejects.toThrow("non-allowlist files: runtime/node");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("validates the architecture-neutral meta package", async () => {
+    const root = await temporaryDirectory();
+    try {
+      await createNpmMetaPackageFixture(root);
+      expect(await validateNpmMetaPackage({ packageRoot: root })).toEqual(
+        expectedNpmMetaPackagePaths(),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects npm packages that still point at a private Node runtime", async () => {
+    const root = await temporaryDirectory();
+    const target = releaseTarget("macos-arm64");
+    try {
+      await createNpmPackageFixture(root, target);
+      await writeFile(path.join(root, "README.md"), "uses runtime/node for the private runtime\n");
+      await expect(
+        validateNpmPackage({ packageRoot: root, target, root: "/repo/source" }),
+      ).rejects.toThrow("must not embed a private Node runtime");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps all published package names under the codex-z npm org", async () => {
+    const source = await readFile(
+      path.resolve(import.meta.dirname, "../../scripts/release/prepare-npm.mjs"),
+      "utf8",
+    );
+    expect(source).toContain('NPM_PACKAGE_NAME = "@codex-z/cli"');
+    expect(Object.values(NPM_PLATFORM_PACKAGE_NAMES)).toEqual([
+      "@codex-z/cli-darwin-arm64",
+      "@codex-z/cli-darwin-x64",
+      "@codex-z/cli-win32-x64",
+      "@codex-z/cli-win32-arm64",
+      "@codex-z/cli-linux-x64",
+      "@codex-z/cli-linux-arm64",
+    ]);
+    expect(source).toContain("publishConfig");
+    expect(source).toContain('access: "public"');
+  });
+
+  it("names npm tarballs with the release target so four matrix jobs do not collide", () => {
+    expect(npmTarballFileName({ version: "0.1.0", target: releaseTarget("macos-arm64") })).toBe(
+      "codex-z-cli-0.1.0-macos-arm64.tgz",
+    );
+    expect(npmTarballFileName({ version: "0.1.0", target: releaseTarget("windows-x64") })).toBe(
+      "codex-z-cli-0.1.0-windows-x64.tgz",
+    );
+    expect(npmTarballFileName({ version: "0.1.0", target: releaseTarget("linux-x64") })).toBe(
+      "codex-z-cli-0.1.0-linux-x64.tgz",
+    );
+    expect(npmTarballFileName({ version: "0.1.0", target: releaseTarget("linux-arm64") })).toBe(
+      "codex-z-cli-0.1.0-linux-arm64.tgz",
+    );
+  });
+});

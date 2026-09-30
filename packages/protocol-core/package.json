@@ -1,0 +1,24 @@
+{
+  "name": "@codex-z/protocol-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@codex-z/harness-adapter": "0.0.0",
+    "@codex-z/mapping-store": "0.0.0",
+    "@codex-z/shared-contracts": "0.0.0",
+    "diff": "8.0.2"
+  }
+}

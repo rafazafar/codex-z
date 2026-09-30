@@ -1,0 +1,1437 @@
+<!doctype html>
+<!-- THROWAWAY UI PROTOTYPE. Three settings layouts via ?variant=A|B|C.
+     All account data and mutations are in-memory mocks. No Host APIs or authentication.
+     Open this file directly; Tailwind CSS and Lucide require internet access. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#1c1c1f" />
+    <title>codex-z · Account quota design exploration</title>
+    <link rel="preconnect" href="https://cdn.tailwindcss.com" />
+    <link rel="preconnect" href="https://unpkg.com" />
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #1c1c1f;
+        --panel: #232326;
+        --line: #36363b;
+        --muted: #a5a5af;
+        --accent: #b2a7ff;
+        --green: #79d4aa;
+        --amber: #e6ba78;
+        --red: #f19b99;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #111113;
+        color: #eeeef1;
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+      button,
+      a,
+      select {
+        touch-action: manipulation;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 4px;
+      }
+      svg {
+        width: 17px;
+        height: 17px;
+        flex-shrink: 0;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1,
+      h2 {
+        text-wrap: balance;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .small {
+        font-size: 12px;
+      }
+      .app {
+        max-width: 1540px;
+        min-height: calc(100vh - 48px);
+        margin: 24px auto;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        overflow: clip;
+      }
+      .topbar {
+        height: 64px;
+        border-bottom: 1px solid var(--line);
+        padding: 0 25px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand {
+        width: 29px;
+        height: 29px;
+        border-radius: 9px;
+        background: #a497fb;
+        color: #211945;
+        display: grid;
+        place-items: center;
+      }
+      .body-grid {
+        display: grid;
+        grid-template-columns: 204px minmax(0, 1fr);
+        min-height: calc(100vh - 114px);
+      }
+      .sidebar {
+        background: #19191c;
+        border-right: 1px solid var(--line);
+        padding: 27px 14px;
+      }
+      .nav-item {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 11px 14px;
+        width: 100%;
+        border: 0;
+        border-radius: 8px;
+        color: #b3b3be;
+        background: transparent;
+        text-align: left;
+        margin-bottom: 5px;
+      }
+      .nav-item:hover {
+        background: #26262c;
+        color: #fff;
+      }
+      .nav-item.active {
+        color: #f3f1ff;
+        background: #303036;
+      }
+      main {
+        padding: 42px 44px 120px;
+        min-width: 0;
+      }
+      .eyebrow {
+        color: #a5a5af;
+        font-size: 11px;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+      main h1 {
+        font-size: 27px;
+        font-weight: 650;
+        letter-spacing: -0.035em;
+      }
+      html {
+        scroll-padding-bottom: 120px;
+      }
+      .btn {
+        display: inline-flex;
+        gap: 7px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #414148;
+        border-radius: 7px;
+        padding: 8px 12px;
+        background: #29292e;
+        color: #e3e3e9;
+        white-space: nowrap;
+        min-height: 36px;
+      }
+      .btn:hover {
+        background: #35353c;
+        border-color: #5a5a65;
+      }
+      .btn.primary {
+        color: #202024;
+        background: #eeeef2;
+        border-color: #eeeef2;
+        font-weight: 600;
+      }
+      .btn.primary:hover {
+        background: #fff;
+      }
+      .btn.ghost {
+        border-color: transparent;
+        background: transparent;
+      }
+      .btn.ghost:hover {
+        background: #313137;
+      }
+      .btn.danger {
+        color: var(--red);
+      }
+      .btn.icon {
+        padding: 8px;
+      }
+      .btn.delete-account {
+        color: #a5a5af;
+      }
+      .btn.delete-account:hover,
+      .btn.delete-account:focus-visible {
+        color: var(--red);
+        background: #f19b9910;
+      }
+      .row-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .plan-label {
+        display: inline-block;
+        padding: 1px 6px;
+        border: 1px solid #48434f;
+        border-radius: 4px;
+        color: #c8c0d8;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .account-meta {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        flex-wrap: wrap;
+        margin-top: 4px;
+      }
+      .renewal {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 6px;
+        font-variant-numeric: tabular-nums;
+      }
+      .account-alert {
+        margin-top: 8px;
+        margin-left: 45px;
+      }
+      .quota-stack {
+        display: grid;
+        gap: 14px;
+        max-width: 380px;
+      }
+      .quota-line {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr) 72px;
+        align-items: center;
+        gap: 3px 10px;
+      }
+      .quota-period {
+        color: #c3c3cd;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .quota-line .value {
+        font-size: 14px;
+        text-align: right;
+        white-space: nowrap;
+      }
+      .quota-line .reset-time {
+        grid-column: 2/-1;
+        margin: 0;
+      }
+      .quota-line .quota-message {
+        grid-column: 2/-1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+      }
+      .quota-line .skeleton {
+        margin: 0;
+        width: 100%;
+      }
+      .quota-line .quota-message .btn {
+        padding: 0 5px;
+        min-height: 28px;
+      }
+      .quota-table .quota-mobile-label {
+        display: none;
+      }
+      .hint {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        color: #b1b1bb;
+        font-size: 12px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        border-radius: 5px;
+        padding: 2px 7px;
+        font-size: 11px;
+        white-space: nowrap;
+        color: #bdb4ff;
+        background: #aca0ff12;
+        border: 1px solid #aca0ff24;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .pill:before {
+        content: "";
+        width: 5px;
+        height: 5px;
+        background: currentColor;
+        border-radius: 50%;
+      }
+      .ok {
+        color: var(--green);
+      }
+      .warn {
+        color: var(--amber);
+      }
+      .hot {
+        color: var(--red);
+      }
+      .toolbar {
+        margin-top: 27px;
+        padding: 18px 0;
+        border-top: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+      .search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+      }
+      .search input {
+        color: #eeeef1;
+        width: 195px;
+        background: transparent;
+        border: 0;
+        padding: 5px 0;
+      }
+      .search input::placeholder {
+        color: #9696a2;
+      }
+      .segment {
+        display: inline-flex;
+        padding: 3px;
+        background: #151518;
+        border: 1px solid #36363c;
+        border-radius: 7px;
+      }
+      .segment button {
+        border: 0;
+        padding: 4px 10px;
+        color: #a8a8b3;
+        background: transparent;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      .segment button[aria-pressed="true"] {
+        background: #39393f;
+        color: #f4f4f6;
+        box-shadow: 0 1px 3px #0003;
+      }
+      .segment button:hover {
+        color: #fff;
+      }
+      .list-panel {
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        overflow: hidden;
+      }
+      .quota-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+      .quota-table th {
+        color: #a4a4b0;
+        background: #202024;
+        font-size: 11px;
+        font-weight: 500;
+        text-align: left;
+        padding: 13px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+      .quota-table td {
+        padding: 19px 20px;
+        border-bottom: 1px solid #303035;
+        vertical-align: middle;
+      }
+      .quota-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      .quota-table tbody tr {
+        background: #232326;
+      }
+      .quota-table tbody tr:hover {
+        background: #26262a;
+      }
+      .identity {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        min-width: 0;
+      }
+      .avatar {
+        height: 34px;
+        width: 34px;
+        flex-shrink: 0;
+        display: grid;
+        place-items: center;
+        color: #c3baff;
+        background: #353044;
+        border: 1px solid #4d435f;
+        border-radius: 10px;
+      }
+      .identity strong {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        font-weight: 550;
+      }
+      .identity .domain {
+        color: #a3a3af;
+        font-size: 12px;
+      }
+      .meter {
+        min-width: 0;
+      }
+      .meter-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .value {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        font-size: 16px;
+        letter-spacing: -0.02em;
+      }
+      .value-label {
+        font-weight: 400;
+        color: #a9a9b5;
+        font-size: 11px;
+        margin-right: 5px;
+      }
+      .track {
+        height: 4px;
+        background: #3c3c43;
+        overflow: hidden;
+        border-radius: 4px;
+      }
+      .fill {
+        display: block;
+        height: 100%;
+        border-radius: 4px;
+        background: #9993b8;
+      }
+      .fill.warn {
+        background: var(--amber);
+      }
+      .fill.hot {
+        background: var(--red);
+      }
+      .reset-time {
+        margin-top: 8px;
+        font-size: 11px;
+        color: #a5a5b1;
+        font-variant-numeric: tabular-nums;
+      }
+      .footnote {
+        display: flex;
+        gap: 7px;
+        align-items: flex-start;
+        font-size: 12px;
+        color: #a5a5af;
+        margin-top: 17px;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .account-card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #232326;
+        overflow: hidden;
+      }
+      .account-card.default {
+        border-color: #766695;
+      }
+      .card-head {
+        padding: 20px;
+        border-bottom: 1px solid #333339;
+      }
+      .card-meters {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 23px;
+        padding: 23px 20px;
+        min-height: 145px;
+      }
+      .card-meters .meter + .meter {
+        border-left: 1px solid #37373d;
+        padding-left: 23px;
+      }
+      .card-meters .meter-head {
+        display: block;
+      }
+      .card-meters .value {
+        display: block;
+        margin-top: 9px;
+        font-size: 27px;
+      }
+      .card-footer {
+        padding: 12px 20px;
+        background: #202024;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        min-height: 425px;
+      }
+      .account-picker {
+        background: #1f1f23;
+        padding: 12px;
+        border-right: 1px solid var(--line);
+      }
+      .pick {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 16px 12px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        margin-bottom: 8px;
+      }
+      .pick:hover {
+        background: #2b2b31;
+      }
+      .pick[aria-pressed="true"] {
+        background: #30303a;
+        border-color: #5e536f;
+      }
+      .detail {
+        padding: 28px;
+        background: #232326;
+        min-width: 0;
+      }
+      .detail .card-meters {
+        padding: 24px 0;
+      }
+      .resource {
+        border-top: 1px solid var(--line);
+        padding-top: 22px;
+        margin-top: 10px;
+      }
+      details summary {
+        cursor: pointer;
+        color: #a5a5af;
+        font-size: 12px;
+      }
+      details p {
+        margin-top: 9px;
+        line-height: 1.7;
+      }
+      .empty {
+        padding: 44px 20px;
+        text-align: center;
+        color: #b2b2be;
+      }
+      .skeleton {
+        height: 5px;
+        width: 80%;
+        margin: 14px 0;
+        background: #42424c;
+        border-radius: 4px;
+      }
+      .review-bar {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border: 1px solid #57505f;
+        border-radius: 12px;
+        padding: 9px 12px;
+        background: #2d2936f5;
+        box-shadow: 0 12px 60px #0008;
+        z-index: 20;
+        max-width: calc(100vw - 24px);
+      }
+      .review-bar .segment {
+        border-color: #514959;
+        background: #211e28;
+      }
+      .review-bar .segment button[aria-pressed="true"] {
+        background: #bdb0ff;
+        color: #231a3a;
+      }
+      select {
+        background: #25212e;
+        color: #eeeaf7;
+        border: 1px solid #595062;
+        border-radius: 6px;
+        font-size: 12px;
+        padding: 6px 8px;
+        max-width: 140px;
+      }
+      .toast {
+        position: fixed;
+        bottom: 100px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 12px 18px;
+        color: #efeafa;
+        background: #3c3549;
+        border: 1px solid #645677;
+        border-radius: 9px;
+        z-index: 50;
+        box-shadow: 0 8px 40px #0006;
+        max-width: 90vw;
+      }
+      .toast:empty {
+        display: none;
+      }
+      dialog {
+        padding: 0;
+        width: min(470px, calc(100vw - 32px));
+        max-height: 85vh;
+        overscroll-behavior: contain;
+        border: 1px solid #50505b;
+        border-radius: 14px;
+        color: #eeeef3;
+        background: #25252b;
+        box-shadow: 0 24px 90px #0009;
+      }
+      dialog::backdrop {
+        background: #0009;
+        backdrop-filter: blur(3px);
+      }
+      .dialog-body {
+        padding: 27px;
+      }
+      .dialog-actions {
+        padding: 16px 27px;
+        border-top: 1px solid #3c3c43;
+        display: flex;
+        justify-content: flex-end;
+        gap: 9px;
+        background: #222227;
+      }
+      .skip {
+        position: fixed;
+        top: -60px;
+        left: 20px;
+        padding: 10px;
+        background: #b2a7ff;
+        color: #17121f;
+        z-index: 100;
+      }
+      .skip:focus {
+        top: 10px;
+      }
+      .design-note {
+        margin-top: 30px;
+        padding-top: 19px;
+        border-top: 1px dashed #3d3d45;
+        display: flex;
+        gap: 12px;
+        color: #acacb7;
+        font-size: 12px;
+      }
+      @media (min-width: 1550px) {
+        .app {
+          margin-top: 40px;
+          min-height: calc(100vh - 80px);
+        }
+      }
+      @media (max-width: 1150px) {
+        .body-grid {
+          grid-template-columns: 170px minmax(0, 1fr);
+        }
+        main {
+          padding: 30px 25px 125px;
+        }
+        .quota-table td,
+        .quota-table th {
+          padding-left: 12px;
+          padding-right: 12px;
+        }
+        .split {
+          grid-template-columns: 250px minmax(0, 1fr);
+        }
+        .detail {
+          padding: 22px;
+        }
+      }
+      @media (max-width: 850px) {
+        .app {
+          margin: 0;
+          border-radius: 0;
+          border: 0;
+        }
+        .body-grid {
+          grid-template-columns: 1fr;
+        }
+        .sidebar {
+          display: none;
+        }
+        main {
+          padding: 26px 20px 150px;
+        }
+        .review-label {
+          display: none;
+        }
+        .quota-table col:nth-child(1) {
+          width: 30% !important;
+        }
+        .quota-table col:nth-child(2) {
+          width: 37% !important;
+        }
+        .quota-table col:nth-child(3) {
+          width: 12% !important;
+        }
+        .quota-table col:nth-child(4) {
+          width: 21% !important;
+        }
+        .quota-line {
+          grid-template-columns: 42px minmax(0, 1fr) 65px;
+          gap: 3px 7px;
+        }
+      }
+      @media (max-width: 600px) {
+        .cards,
+        .split {
+          grid-template-columns: 1fr;
+        }
+        .account-picker {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+          max-height: 245px;
+          overflow: auto;
+        }
+        .topbar {
+          padding: 0 18px;
+        }
+        .topbar .small {
+          display: none;
+        }
+        .header-row {
+          flex-wrap: wrap;
+        }
+        .review-bar {
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 6px;
+          bottom: 10px;
+          width: calc(100vw - 24px);
+        }
+        .review-bar .btn.icon {
+          display: none;
+        }
+        .quota-table,
+        .quota-table tbody,
+        .quota-table tr,
+        .quota-table td {
+          display: block;
+          width: 100%;
+        }
+        .quota-table thead {
+          display: none;
+        }
+        .quota-table tr {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 0 15px;
+          padding: 16px;
+          border-bottom: 1px solid var(--line);
+        }
+        .quota-table td {
+          padding: 9px 0;
+          border: 0;
+        }
+        .quota-table td:first-child,
+        .quota-table td:nth-child(2) {
+          grid-column: 1/-1;
+        }
+        .quota-table td:nth-child(2) {
+          padding-top: 17px;
+          padding-bottom: 17px;
+        }
+        .quota-table td:nth-child(3),
+        .quota-table td:nth-child(4) {
+          border-top: 1px solid var(--line);
+          padding-top: 12px;
+        }
+        .quota-table td:last-child {
+          text-align: right;
+        }
+        .quota-table .quota-mobile-label {
+          display: inline;
+          margin-right: 6px;
+          color: var(--muted);
+          font-size: 12px;
+        }
+        .avatar {
+          width: 30px;
+          height: 30px;
+        }
+        .toolbar {
+          align-items: flex-start;
+        }
+      }
+      @media (min-width: 601px) {
+        .period-mobile {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a href="#main" class="skip">Skip to Account content</a>
+    <div class="app">
+      <header class="topbar">
+        <div class="flex items-center gap-3">
+          <span class="brand"><i data-lucide="orbit"></i></span
+          ><strong class="text-base tracking-tight" translate="no">codex-z</strong
+          ><span class="mx-2 h-5 w-px bg-zinc-700"></span><span class="muted">Settings</span>
+        </div>
+        <span class="small muted flex items-center gap-2"
+          ><i data-lucide="flask-conical"></i>Interactive prototype · no real Account
+          connections</span
+        >
+      </header>
+      <div class="body-grid">
+        <aside class="sidebar" aria-label="Settings navigation">
+          <p class="eyebrow px-3 mb-3">General</p>
+          <button class="nav-item" data-action="nav"><i data-lucide="plug"></i>Connections</button>
+          <button class="nav-item active" aria-current="page" data-action="accounts">
+            <i data-lucide="users"></i>Account
+          </button>
+          <button class="nav-item" data-action="nav">
+            <i data-lucide="folder-input"></i>Session import
+          </button>
+          <button class="nav-item" data-action="nav">
+            <i data-lucide="circle-arrow-up"></i>Update
+          </button>
+          <p class="eyebrow px-3 mt-8 mb-3">Other</p>
+          <button class="nav-item" data-action="nav"><i data-lucide="info"></i>About</button>
+          <button class="nav-item" data-action="nav"><i data-lucide="star"></i>Give a Star</button>
+          <div class="px-3 mt-16 small muted leading-relaxed">
+            Accounts apply to new Codex tasks.<br />Existing tasks keep their original Accounts.
+          </div>
+        </aside>
+        <main id="main">
+          <div class="flex items-start justify-between gap-5 header-row">
+            <div>
+              <p class="eyebrow mb-2">ACCOUNT MANAGEMENT</p>
+              <h1>Account</h1>
+              <p class="muted mt-2 text-[13px]">
+                Select the default Account for new Codex tasks and view Account quotas.
+              </p>
+            </div>
+            <button class="btn primary mt-5" data-action="add">
+              <i data-lucide="plus"></i>Add Account
+            </button>
+          </div>
+          <div class="flex items-center justify-between gap-4 mt-5 flex-wrap">
+            <p class="hint">
+              <i data-lucide="info"></i>Changing the default Account does not affect active tasks.
+              Multiple Accounts are currently supported for Codex only.
+            </p>
+            <button class="btn ghost small" data-action="help">
+              <i data-lucide="circle-help"></i>Before login
+            </button>
+          </div>
+          <div class="toolbar">
+            <div class="flex items-center gap-5 flex-wrap">
+              <h2 class="text-[13px] font-medium">
+                Connected Accounts <span id="count" class="muted ml-1">3</span>
+              </h2>
+              <label class="search"
+                ><i data-lucide="search"></i
+                ><input
+                  id="search"
+                  type="search"
+                  aria-label="Search Accounts"
+                  name="account-search"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="Search Accounts..."
+              /></label>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="segment" aria-label="Quota display basis">
+                <button data-mode="used" aria-pressed="true">Used</button
+                ><button data-mode="remaining" aria-pressed="false">Remaining</button>
+              </div>
+              <button
+                class="btn ghost icon"
+                data-action="refresh"
+                aria-label="Refresh simulated quota"
+                title="Refresh simulated quota"
+              >
+                <i data-lucide="refresh-cw"></i>
+              </button>
+            </div>
+          </div>
+          <div id="content"></div>
+          <div class="footnote">
+            <i data-lucide="clock-3"></i
+            ><span id="update-note"
+              >Demo snapshot · Dates demonstrate layout only. Quota windows are independent and are
+              not added together.</span
+            >
+          </div>
+          <div class="design-note">
+            <i data-lucide="pencil-ruler"></i>
+            <div>
+              <strong id="design-title" class="text-zinc-300 font-medium"></strong>
+              <p id="design-copy" class="mt-1 leading-relaxed"></p>
+            </div>
+          </div>
+          <details class="mt-5">
+            <summary>Prototype state and data notes</summary>
+            <p class="small muted">
+              The first two Accounts in the screenshot show 9% used for 7 days, and 1% used for 5
+              hours / 0% used for 7 days. The third Account, plans, renewal times, and error
+              scenarios are demo data, not real subscriptions. Renewal times use UTC+8 and are
+              independent of quota reset and reset-card expiry. As requested, Pro 5x / 20x examples
+              have no 5-hour window. A arranges applicable windows in one quota column without empty
+              slots. Applicable quotas not yet received remain unknown, not 0%. Plan labels do not
+              establish product capabilities. Deletion needs confirmation. Switch defaults before
+              deleting the default Account. Refresh, add, default selection, delete, and reset are
+              in-memory simulations only.
+            </p>
+            <pre
+              id="state"
+              class="text-[11px] text-zinc-400 mt-3 whitespace-pre-wrap break-all"
+            ></pre>
+          </details>
+        </main>
+      </div>
+    </div>
+    <nav class="review-bar" aria-label="Switch prototype design">
+      <span class="review-label small text-violet-200 px-1">Design exploration</span>
+      <button class="btn ghost icon" data-action="prev" aria-label="Previous design">
+        <i data-lucide="chevron-left"></i>
+      </button>
+      <div class="segment">
+        <button data-variant="A">A Compact list</button
+        ><button data-variant="B">B Parallel cards</button
+        ><button data-variant="C">C List with details</button>
+      </div>
+      <button class="btn ghost icon" data-action="next" aria-label="Next design">
+        <i data-lucide="chevron-right"></i>
+      </button>
+      <label class="sr-only" for="scenario">Simulated data scenario</label
+      ><select id="scenario">
+        <option value="normal">Scenario: normal quota</option>
+        <option value="pressure">Scenario: low quota</option>
+        <option value="pro">Scenario: Pro 5x / 20x</option>
+        <option value="missing">Scenario: loading / failure</option>
+        <option value="empty">Scenario: no Accounts</option>
+      </select>
+    </nav>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <dialog id="dialog" aria-labelledby="dialog-title">
+      <div class="dialog-body">
+        <div id="dialog-icon" class="avatar mb-4"></div>
+        <h2 id="dialog-title" class="text-xl font-semibold"></h2>
+        <div id="dialog-copy" class="mt-3 text-[13px] text-zinc-300 leading-7"></div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" id="cancel">Cancel</button
+        ><button class="btn primary" id="confirm">Confirm</button>
+      </div>
+    </dialog>
+    <script>
+      const $ = (selector) => document.querySelector(selector);
+      const icon = (name) => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+      const params = new URLSearchParams(location.search);
+      let variant = ["A", "B", "C"].includes(params.get("variant")) ? params.get("variant") : "A";
+      let mode = "used",
+        selected = "a",
+        search = "",
+        scenario = "normal",
+        refreshing = false;
+      let toastTimer, onConfirm, dialogTrigger;
+      const base = () => [
+        {
+          id: "a",
+          name: "user",
+          domain: "example.com",
+          plan: "Pro 5x",
+          renewsAt: "2026-09-17T14:24:00+08:00",
+          hasFiveHour: false,
+          default: true,
+          five: null,
+          seven: 9,
+          cards: 2,
+          expires: ["October 4 09:54", "October 8 09:54"],
+          state: "ready",
+        },
+        {
+          id: "b",
+          name: "example_user",
+          domain: "example.org",
+          plan: "Team",
+          renewsAt: "2026-09-11T21:24:00+08:00",
+          default: false,
+          five: 1,
+          seven: 0,
+          cards: 1,
+          expires: ["October 5 06:21"],
+          state: "ready",
+        },
+        {
+          id: "c",
+          name: "demo_user",
+          domain: "example.net",
+          plan: "Team",
+          renewsAt: "2026-09-11T21:24:00+08:00",
+          default: false,
+          five: 38,
+          seven: 24,
+          cards: 0,
+          expires: [],
+          state: "ready",
+        },
+      ];
+      let accounts = base();
+      const specs = {
+        A: [
+          "A · Compact list / actual quota windows",
+          "Four columns: Account, quota, reset cards, and actions. Show applicable windows only; one or multiple windows use equal bar widths without empty slots. Plan and email share a row; renewal is separate. Highlight abnormal states without repeated normal notices.",
+        ],
+        B: [
+          "B · Parallel cards / easier reading",
+          "One complete card per Account with equal quota-window prominence. Easy to read with 2–4 Accounts; more Accounts still require scrolling.",
+        ],
+        C: [
+          "C · List + details / progressive disclosure",
+          "The list shows identity and quota notices only; selection reveals full information. Useful for many Accounts and details, but comparison requires switching Accounts.",
+        ],
+      };
+      function icons() {
+        window.lucide?.createIcons();
+        document
+          .querySelectorAll("svg.lucide")
+          .forEach((el) => el.setAttribute("aria-hidden", "true"));
+      }
+      function notify(text) {
+        clearTimeout(toastTimer);
+        $("#toast").textContent = text;
+        toastTimer = setTimeout(() => ($("#toast").textContent = ""), 3600);
+      }
+      function tone(n) {
+        return n >= 90 ? "hot" : n >= 70 ? "warn" : "";
+      }
+      function health(a) {
+        if (refreshing || a.state === "loading") return ["muted", "Reading"];
+        if (a.state === "error") return ["warn", "Read failed"];
+        const values = [a.five, a.seven].filter((v) => v !== null);
+        if (!values.length) return ["muted", "No quota data"];
+        const max = Math.max(...values);
+        if (max >= 100) return ["hot", "Window quota exhausted"];
+        if (max >= 90) return ["hot", "Low quota"];
+        if (max >= 70) return ["warn", "High usage"];
+        return [
+          "ok",
+          values.length < (a.hasFiveHour === false ? 1 : 2)
+            ? "Returned windows have sufficient quota"
+            : "Sufficient quota",
+        ];
+      }
+      function status(a) {
+        const [t, label] = health(a);
+        return `<span class="pill ${t}">${label}</span>`;
+      }
+      function identity(a, badge = true, subscription = false) {
+        const renewal =
+          subscription && a.renewsAt
+            ? `<time class="renewal" datetime="${a.renewsAt}" title="${new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", dateStyle: "long", timeStyle: "short" }).format(new Date(a.renewsAt))} (UTC+8) · Demo subscription time">${new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", month: "long", day: "numeric" }).format(new Date(a.renewsAt))} renews</time>`
+            : "";
+        return `<div class="identity"><div class="avatar">${icon("terminal")}</div><div class="min-w-0"><div class="flex items-center gap-2"><strong title="${a.name}@${a.domain}">${a.name}</strong>${badge && a.default ? '<span class="badge">Default</span>' : ""}</div><div class="${subscription ? "account-meta" : ""}"><span class="domain">@${a.domain}</span>${subscription && a.plan ? `<span class="muted" aria-hidden="true">·</span><span class="plan-label">${a.plan}</span>` : ""}</div>${renewal}</div></div>`;
+      }
+      function meter(a, period, compact = false) {
+        const n = a[period],
+          label = period === "five" ? "5 hours" : "7 days";
+        // Explicit mock capability, not inferred from a missing value or a plan-name match.
+        if (period === "five" && a.hasFiveHour === false)
+          return compact
+            ? ""
+            : '<div class="meter"><span class="sr-only">5-hour quota does not apply to this plan</span></div>';
+        const heading = `<span class="small muted ${compact ? "period-mobile" : ""}">${label}</span>`;
+        if (refreshing || a.state === "loading")
+          return `<div class="meter" aria-label="${label} quota loading">${heading}<div class="skeleton"></div><span class="small muted">Loading...</span></div>`;
+        if (a.state === "error")
+          return `<div class="meter">${heading}<p class="small warn mt-2">Read failed</p><button class="btn ghost small !px-0" data-action="retry" data-id="${a.id}">Read again</button></div>`;
+        if (n === null)
+          return `<div class="meter">${heading}<p class="muted mt-2">— <span class="small">Window not returned</span></p><p class="reset-time">Does not mean zero quota</p></div>`;
+        const amount = mode === "used" ? n : 100 - n;
+        const reset =
+          period === "five"
+            ? "September 7 02:44"
+            : a.id === "a"
+              ? "September 13 21:16"
+              : "September 13 21:44";
+        return `<div class="meter"><div class="meter-head">${heading}<span class="value ${tone(n)}"><span class="value-label">${mode === "used" ? "Used" : "Remaining"}</span>${amount}%</span></div><div class="track" role="meter" aria-label="${a.name} ${label}${mode === "used" ? "Used" : "Remaining"}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${amount}"><span class="fill ${tone(n)}" style="width:${amount}%"></span></div><p class="reset-time">${reset} reset</p></div>`;
+      }
+      function defaultButton(a) {
+        return a.default
+          ? '<span class="small muted inline-flex items-center gap-1">' +
+              icon("check") +
+              "Default Account</span>"
+          : `<button class="btn ghost small" data-action="default" data-id="${a.id}">Set default</button>`;
+      }
+      function creditsButton(a) {
+        return `<button class="btn ghost small !px-0" data-action="credits" data-id="${a.id}" aria-label="${a.name}, ${a.cards} reset cards, view details">${icon("ticket")}<span>${a.cards} cards</span>${icon("chevron-right")}</button>`;
+      }
+      function quotaLine(a, period) {
+        const label = period === "five" ? "5 hours" : "7 days";
+        const heading = `<span class="quota-period">${label}</span>`;
+        if (refreshing || a.state === "loading")
+          return `<div class="quota-line">${heading}<div class="skeleton" aria-hidden="true"></div><span class="small muted">Loading...</span></div>`;
+        if (a.state === "error")
+          return `<div class="quota-line">${heading}<div class="quota-message"><span class="warn">Read failed</span><button class="btn ghost small" data-action="retry" data-id="${a.id}">Read again</button></div></div>`;
+        if (a[period] === null)
+          return `<div class="quota-line">${heading}<span class="quota-message muted">No data</span></div>`;
+        const amount = mode === "used" ? a[period] : 100 - a[period];
+        const reset =
+          period === "five"
+            ? "September 7 02:44"
+            : a.id === "a"
+              ? "September 13 21:16"
+              : "September 13 21:44";
+        return `<div class="quota-line">${heading}<div class="track" role="meter" aria-label="${a.name} ${label}${mode === "used" ? "Used" : "Remaining"}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${amount}"><span class="fill ${tone(a[period])}" style="width:${amount}%"></span></div><span class="value ${tone(a[period])}"><span class="value-label">${mode === "used" ? "Used" : "Remaining"}</span>${amount}%</span><p class="reset-time">${reset} reset</p></div>`;
+      }
+      function VariantA(list) {
+        return `<div class="list-panel"><table class="quota-table"><caption class="sr-only">Account quota list: applicable windows only, calculated independently</caption><colgroup><col style="width:32%"><col style="width:38%"><col style="width:12%"><col style="width:18%"></colgroup><thead><tr><th scope="col">Account</th><th scope="col">Quota</th><th scope="col">Reset cards</th><th scope="col" class="!text-right">Actions</th></tr></thead><tbody>${list.map((a) => `<tr><td>${identity(a, true, true)}${["warn", "hot"].includes(health(a)[0]) ? `<div class="account-alert">${status(a)}</div>` : ""}</td><td><div class="quota-stack">${(a.hasFiveHour === false ? ["seven"] : ["five", "seven"]).map((period) => quotaLine(a, period)).join("")}</div></td><td><span class="quota-mobile-label">Reset cards</span>${creditsButton(a)}</td><td class="text-right"><div class="row-actions">${a.default ? "" : defaultButton(a)}<button class="btn ghost icon delete-account" data-action="delete" data-id="${a.id}" aria-label="Delete ${a.name}" title="Delete Account">${icon("trash-2")}</button></div></td></tr>`).join("")}</tbody></table></div>`;
+      }
+      function VariantB(list) {
+        return `<div class="cards">${list.map((a) => `<article class="account-card ${a.default ? "default" : ""}"><header class="card-head"><div class="flex items-center justify-between gap-2">${identity(a)}<button class="btn ghost icon" data-action="details" data-id="${a.id}" aria-label="View ${a.name} details">${icon("ellipsis")}</button></div><div class="mt-4">${status(a)}</div></header><div class="card-meters">${meter(a, "five")}${meter(a, "seven")}</div><footer class="card-footer"><div class="flex items-center gap-2"><span class="small muted">Reset cards</span>${creditsButton(a)}</div>${defaultButton(a)}</footer></article>`).join("")}</div>`;
+      }
+      function VariantC(list) {
+        const a = list.find((a) => a.id === selected) || list[0];
+        selected = a.id;
+        return `<div class="split"><div class="account-picker" aria-label="Select Account">${list.map((item) => `<button class="pick" data-action="select" data-id="${item.id}" aria-pressed="${item.id === a.id}">${identity(item)}<div class="mt-3 ml-[45px]">${status(item)}</div></button>`).join("")}</div><section class="detail" aria-label="${a.name} Account details"><div class="flex items-center justify-between gap-3 flex-wrap">${identity(a)}${defaultButton(a)}</div><div class="flex items-center justify-between mt-7"><h2 class="text-sm font-medium">Quota overview</h2>${status(a)}</div><div class="card-meters">${meter(a, "five")}${meter(a, "seven")}</div><div class="resource"><div class="flex justify-between gap-3 items-center"><div><h3 class="flex items-center gap-2 text-sm">${icon("ticket")}Reset cards <span class="badge">${a.cards} cards</span></h3><p class="small muted mt-2">${a.cards ? `Earliest expiry: ${a.expires[0]}` : "No available reset cards"}</p></div><button class="btn small" data-action="credits" data-id="${a.id}">View details</button></div><p class="small muted mt-4">Use resets both 5-hour and 7-day quotas. Cards are not used automatically.</p></div></section></div>`;
+      }
+      function render() {
+        const list = accounts.filter((a) =>
+          `${a.name}@${a.domain}`.toLowerCase().includes(search.toLowerCase()),
+        );
+        $("#count").textContent = accounts.length;
+        $("#content").innerHTML = !list.length
+          ? `<div class="list-panel empty"><div class="flex justify-center mb-3">${icon(search ? "search-x" : "users")}</div><h2 class="text-base text-zinc-200">${search ? "No matching Accounts" : "No connected Accounts"}</h2><p class="mt-2 small">${search ? "Try another email or Account name." : "Add a Codex Account to view quotas here."}</p><button class="btn mt-5" data-action="${search ? "clear" : "add"}">${search ? "Clear search" : "Add demo Account"}</button></div>`
+          : { A: VariantA, B: VariantB, C: VariantC }[variant](list);
+        $('[data-action="refresh"]').disabled = refreshing;
+        document
+          .querySelectorAll("[data-variant]")
+          .forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.variant === variant)));
+        document
+          .querySelectorAll("[data-mode]")
+          .forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+        $("#design-title").textContent = specs[variant][0];
+        $("#design-copy").textContent = specs[variant][1];
+        $("#state").textContent = JSON.stringify(
+          { variant, mode, scenario, selected, refreshing, accounts },
+          null,
+          2,
+        );
+        icons();
+      }
+      function switchVariant(v) {
+        variant = v;
+        const url = new URL(location.href);
+        url.searchParams.set("variant", v);
+        history.replaceState(null, "", url);
+        render();
+      }
+      function cycle(delta) {
+        const keys = ["A", "B", "C"];
+        switchVariant(keys[(keys.indexOf(variant) + delta + 3) % 3]);
+      }
+      function modal(title, copy, label, callback, symbol = "info", disabled = false) {
+        dialogTrigger = document.activeElement;
+        $("#dialog-title").textContent = title;
+        $("#dialog-copy").innerHTML = copy;
+        $("#dialog-icon").innerHTML = icon(symbol);
+        $("#confirm").textContent = label;
+        $("#confirm").disabled = disabled;
+        onConfirm = callback;
+        $("#cancel").textContent = callback ? "Cancel" : "Close";
+        icons();
+        $("#dialog").showModal();
+        $("#cancel").focus();
+      }
+      function credits(a) {
+        modal(
+          "Reset cards",
+          `<p class="text-zinc-100">${a.name}@${a.domain}</p><p class="mt-2">Available: <strong>${a.cards}</strong> cards.${a.cards ? "Expiry times:" : "No reset cards available."}</p>${a.expires.map((d, i) => `<div class="flex justify-between border-b border-zinc-700 py-2"><span>Reset cards ${i + 1}</span><span>${d}</span></div>`).join("")}<p class="mt-4 muted">One card resets both 5-hour and 7-day quotas. It is consumed only after confirmation, never automatically.</p>`,
+          "Use 1 card",
+          () => {
+            modal(
+              "Use a reset card?",
+              `<p>Account：<strong>${a.name}@${a.domain}</strong></p><p class="mt-3">This consumes <strong>1 reset card</strong> and resets both 5-hour and 7-day quotas. This cannot be undone.</p><p class="mt-3 warn">This interactive demo consumes no real cards. Missing quota windows remain unknown.</p>`,
+              "Confirm use (simulation)",
+              () => {
+                a.cards--;
+                a.expires.shift();
+                if (a.five !== null) a.five = 0;
+                if (a.seven !== null) a.seven = 0;
+                render();
+                notify("Simulated reset succeeded; consumed 1 demo reset card");
+              },
+              "rotate-ccw",
+            );
+          },
+          "ticket",
+          a.cards === 0 || a.state !== "ready" || refreshing,
+        );
+      }
+      function loadScenario(value) {
+        scenario = value;
+        accounts = base();
+        selected = "a";
+        if (value === "pressure") {
+          accounts[0].seven = 94;
+          accounts[1].five = 100;
+          accounts[1].seven = 72;
+          accounts[2].five = 78;
+        }
+        if (value === "pro") {
+          accounts[2].plan = "Pro 20x";
+          accounts[2].hasFiveHour = false;
+          accounts[2].five = null;
+        }
+        if (value === "missing") {
+          accounts[0].state = "loading";
+          accounts[1].state = "error";
+          accounts[2].five = null;
+          accounts[2].seven = null;
+        }
+        if (value === "empty") accounts = [];
+        render();
+        notify("Demo scenario changed; Account data restored");
+      }
+      $("#cancel").onclick = () => $("#dialog").close();
+      $("#confirm").onclick = () => {
+        const callback = onConfirm;
+        $("#dialog").close();
+        callback?.();
+      };
+      $("#dialog").addEventListener("close", () => {
+        if (!$("#dialog").open && dialogTrigger?.isConnected) dialogTrigger.focus();
+      });
+      $("#search").addEventListener("input", (e) => {
+        search = e.target.value;
+        render();
+      });
+      $("#scenario").addEventListener("change", (e) => loadScenario(e.target.value));
+      document.addEventListener("click", (e) => {
+        const b = e.target.closest("button");
+        if (!b || b.disabled) return;
+        if (b.dataset.variant) return switchVariant(b.dataset.variant);
+        if (b.dataset.mode) {
+          mode = b.dataset.mode;
+          render();
+          return;
+        }
+        const a = accounts.find((a) => a.id === b.dataset.id);
+        switch (b.dataset.action) {
+          case "prev":
+            cycle(-1);
+            break;
+          case "next":
+            cycle(1);
+            break;
+          case "nav":
+            notify(
+              "This prototype shows the Accounts page only; other settings are outside the demo scope",
+            );
+            break;
+          case "accounts":
+            $("#main").scrollIntoView();
+            break;
+          case "clear":
+            search = "";
+            $("#search").value = "";
+            render();
+            $("#search").focus();
+            break;
+          case "select":
+            selected = a.id;
+            render();
+            document.querySelector(`.pick[data-id="${a.id}"]`)?.focus();
+            break;
+          case "default":
+            accounts.forEach((item) => (item.default = item.id === a.id));
+            render();
+            notify(`Set ${a.name} as default; affects new tasks only (simulation)`);
+            break;
+          case "delete":
+            if (a.default) {
+              modal(
+                "Change default Account first",
+                `<p><strong>${a.name}@${a.domain}</strong> is the current default Account.</p><p class="mt-3">Set another Account as default before deleting this Account. The prototype does not choose a new default automatically.</p><p class="mt-3 muted">This prototype deletion guard performs no real deletion.</p>`,
+                "Understood",
+                null,
+                "shield-check",
+              );
+            } else {
+              modal(
+                "Delete this Account?",
+                `<p><strong>${a.name}@${a.domain}</strong></p><p class="mt-3">Real deletion removes this Account and local data permanently.</p><p class="mt-3 warn">This removes the demo list entry only; real Accounts and local files are preserved.</p>`,
+                "Confirm delete (simulation)",
+                () => {
+                  accounts = accounts.filter((item) => item.id !== a.id);
+                  if (selected === a.id) selected = accounts[0]?.id ?? "";
+                  render();
+                  $("#search").focus();
+                  notify(`Deleted demo Account ${a.name}`);
+                },
+                "trash-2",
+              );
+            }
+            break;
+          case "credits":
+            credits(a);
+            break;
+          case "details":
+            modal(
+              "Account details",
+              `<p>${a.name}@${a.domain}</p><p class="mt-2">${a.default ? "Current default Account, for new tasks only." : "Default changes preserve existing tasks."}</p><p class="mt-2">${health(a)[1]} · ${a.cards} cardsReset cards</p>`,
+              "View reset cards",
+              () => credits(a),
+              "user-round",
+            );
+            break;
+          case "help":
+            modal(
+              "Before login",
+              '<p>In Web Settings → Account security and login, enable device-code authorization for Codex.</p><p class="mt-3 muted">The prototype does not start login or collect credentials.</p>',
+              "Understood",
+              null,
+              "shield-check",
+            );
+            break;
+          case "add":
+            modal(
+              "Add demo Account",
+              '<p>The real product starts native Codex login here.</p><p class="mt-3 muted">This prototype adds an example Account without quota data and collects no email, password, or device code.</p>',
+              "Add demo Account",
+              () => {
+                const id = `demo-${Date.now()}`;
+                accounts.push({
+                  id,
+                  name: `demo_${accounts.length + 1}`,
+                  domain: "example.com",
+                  default: !accounts.length,
+                  five: null,
+                  seven: null,
+                  cards: 0,
+                  expires: [],
+                  state: "ready",
+                });
+                selected = id;
+                search = "";
+                $("#search").value = "";
+                render();
+                notify("Demo Account added; quota not yet returned");
+              },
+              "user-round-plus",
+            );
+            break;
+          case "retry":
+            a.state = "ready";
+            render();
+            notify("Simulated reread succeeded");
+            break;
+          case "refresh":
+            refreshing = true;
+            render();
+            setTimeout(() => {
+              refreshing = false;
+              accounts.forEach((a) => (a.state = "ready"));
+              render();
+              $("#update-note").textContent =
+                "Simulated refresh complete · not live Account data. Quota windows are independent and not added together.";
+              notify("Simulated refresh complete; no real Account service requested");
+            }, 750);
+            break;
+        }
+      });
+      document.addEventListener("keydown", (e) => {
+        if (
+          $("#dialog").open ||
+          e.target.closest("input,textarea,select,button,[contenteditable]") ||
+          e.altKey ||
+          e.metaKey ||
+          e.ctrlKey
+        )
+          return;
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+          cycle(e.key === "ArrowLeft" ? -1 : 1);
+        }
+      });
+      render();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,46 @@
+name: Feature request
+description: Describe the real use case and required capability. An implementation design is not required.
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Other / Unknown
+        - Desktop / Renderer
+        - Harness Adapter
+        - Thread / History
+        - Accounts / Usage
+        - Install / Update
+        - Remote
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What should be added or improved?
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Who encounters the limit, under which conditions, and how do they work around it now?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the required visible behavior. For a Harness feature, state its native capability or supporting documentation. Keep Model and Harness distinct.
+    validations:
+      required: true
+  - type: input
+    id: related
+    attributes:
+      label: Related issues
+      description: Link existing Issues / PRs, or enter N/A.

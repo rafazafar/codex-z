@@ -1,0 +1,65 @@
+# Local-only references, private documentation, and agent state
+/docsp/
+/reference/
+/.pi/
+/downloads/
+/.codex-z/
+/pr-triage/
+/.claude/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependencies and tool caches
+node_modules/
+.npm/
+.cache/
+.wix/
+.vite/
+.vitest/
+.eslintcache
+*.tsbuildinfo
+
+# Local website draft and deployment workflow
+/website/
+/.github/workflows/deploy-website.yml
+
+# Build, test, and coverage output
+target/
+dist/
+/build/
+coverage/
+playwright-report/
+blob-report/
+test-results/
+*.lcov
+*.profraw
+*.rs.bk
+*.chp
+/tests/differential/output/
+
+# Logs and process state
+*.log
+*.log.*
+npm-debug.log*
+*.pid
+*.pid.lock
+
+# Editors
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# Operating systems
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+NUL

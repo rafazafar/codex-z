@@ -1,0 +1,197 @@
+import type { ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { OfficialProcessStopTimeoutError } from "../src/official-process-lifecycle.js";
+
+import {
+  createLoopbackOfficialAppServerListener,
+  createRemoteOfficialAppServerListener,
+  remoteOfficialAppServerSocketPath,
+} from "../src/remote-official-app-server.js";
+
+class FakeOfficialListenerProcess extends EventEmitter {
+  readonly pid = 123;
+  readonly stderr = new PassThrough();
+  readonly kill = vi.fn(() => {
+    queueMicrotask(() => this.emit("exit", null, "SIGTERM"));
+    return true;
+  });
+}
+
+class StubbornOfficialListenerProcess extends EventEmitter {
+  readonly stderr = new PassThrough();
+  readonly kill = vi.fn((signal?: NodeJS.Signals) => {
+    if (signal === "SIGKILL") queueMicrotask(() => this.emit("exit", null, "SIGKILL"));
+    return true;
+  });
+}
+
+afterEach(() => vi.useRealTimers());
+
+describe("shared remote official app-server", () => {
+  it("uses a private sibling socket distinct from the Desktop control socket", () => {
+    expect(
+      remoteOfficialAppServerSocketPath(
+        "/Users/developer/.codex/app-server-control/app-server-control.sock",
+        "fixture1234",
+      ),
+    ).toBe("/Users/developer/.codex/app-server-control/.c-fixture1234.sock");
+  });
+
+  it("keeps the private sibling basename within the public socket path budget", () => {
+    const publicSocket = "/Users/developer/.codex/app-server-control/app-server-control.sock";
+    const privateSocket = remoteOfficialAppServerSocketPath(
+      publicSocket,
+      "12345678-1234-1234-1234-123456789abc",
+    );
+
+    expect(Buffer.byteLength(path.posix.basename(privateSocket))).toBeLessThanOrEqual(
+      Buffer.byteLength(path.posix.basename(publicSocket)),
+    );
+  });
+
+  it("starts one listener and keeps it alive until the remote Host closes", async () => {
+    const child = new FakeOfficialListenerProcess();
+    const spawnOfficial = vi.fn(
+      () => child as unknown as ReturnType<typeof spawn> & ChildProcess,
+    ) as unknown as typeof spawn;
+    const waitUntilReady = vi.fn(async () => undefined);
+    const listener = createRemoteOfficialAppServerListener({
+      stockCodexPath: "/synthetic/codex",
+      arguments: ["app-server", "--listen", "unix:///tmp/codex-z-official.sock"],
+      socketPath: "/tmp/codex-z-official.sock",
+      environment: { PATH: "/usr/bin" },
+      diagnosticOutput: new PassThrough(),
+      spawnOfficial,
+      waitUntilReady,
+    });
+
+    await listener.listen();
+    await listener.listen();
+
+    expect(spawnOfficial).toHaveBeenCalledTimes(1);
+    expect(spawnOfficial).toHaveBeenCalledWith(
+      "/synthetic/codex",
+      ["app-server", "--listen", "unix:///tmp/codex-z-official.sock"],
+      expect.objectContaining({
+        env: { PATH: "/usr/bin" },
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      }),
+    );
+    expect(waitUntilReady).toHaveBeenCalledWith("/tmp/codex-z-official.sock", expect.any(Promise));
+    expect(child.kill).not.toHaveBeenCalled();
+
+    await listener.close();
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    await expect(listener.closed).resolves.toEqual({ code: null, signal: "SIGTERM" });
+  });
+
+  it("escalates shutdown when the official listener ignores SIGTERM", async () => {
+    const child = new StubbornOfficialListenerProcess();
+    const listener = createRemoteOfficialAppServerListener({
+      stockCodexPath: "/synthetic/codex",
+      arguments: ["app-server", "--listen", "unix:///tmp/codex-z-official.sock"],
+      socketPath: "/tmp/codex-z-official.sock",
+      environment: { PATH: "/usr/bin" },
+      diagnosticOutput: new PassThrough(),
+      spawnOfficial: vi.fn(
+        () => child as unknown as ReturnType<typeof spawn> & ChildProcess,
+      ) as unknown as typeof spawn,
+      waitUntilReady: vi.fn(async () => undefined),
+      closeTimeoutMs: 1,
+    });
+
+    await listener.listen();
+    await listener.close();
+
+    expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    await expect(listener.closed).resolves.toEqual({ code: null, signal: "SIGKILL" });
+  });
+
+  it("discovers one dynamic loopback listener and reuses it for every client", async () => {
+    const child = new FakeOfficialListenerProcess();
+    const spawnOfficial = vi.fn(
+      () => child as unknown as ReturnType<typeof spawn> & ChildProcess,
+    ) as unknown as typeof spawn;
+    const listener = createLoopbackOfficialAppServerListener({
+      stockCodexPath: "C:\\synthetic\\codex.exe",
+      arguments: ["app-server", "--listen", "ws://127.0.0.1:0"],
+      environment: { PATH: "C:\\Windows\\System32" },
+      diagnosticOutput: new PassThrough(),
+      spawnOfficial,
+    });
+
+    const first = listener.listen();
+    child.stderr.write("codex app-server (WebSockets)\n");
+    child.stderr.write("  listening on: ws://127.0.0.1:43821\n");
+
+    await expect(first).resolves.toBe("ws://127.0.0.1:43821");
+    await expect(listener.listen()).resolves.toBe("ws://127.0.0.1:43821");
+    expect(spawnOfficial).toHaveBeenCalledTimes(1);
+    expect(spawnOfficial).toHaveBeenCalledWith(
+      "C:\\synthetic\\codex.exe",
+      ["app-server", "--listen", "ws://127.0.0.1:0"],
+      expect.objectContaining({
+        env: { PATH: "C:\\Windows\\System32" },
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      }),
+    );
+
+    await listener.close();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it.each(["unix", "loopback"])(
+    "does not report %s listener shutdown success without exit",
+    async (transport) => {
+      vi.useFakeTimers();
+      const child = new FakeOfficialListenerProcess();
+      child.kill.mockImplementation(() => true);
+      const diagnosticOutput = new PassThrough();
+      let diagnostics = "";
+      diagnosticOutput.on("data", (chunk: Buffer) => {
+        diagnostics += chunk.toString();
+      });
+      const input = {
+        stockCodexPath: "synthetic-codex",
+        arguments: ["app-server"],
+        environment: {},
+        diagnosticOutput,
+        spawnOfficial: vi.fn(() => child as unknown as ChildProcess) as unknown as typeof spawn,
+        closeTimeoutMs: 10,
+      };
+      const listener =
+        transport === "unix"
+          ? createRemoteOfficialAppServerListener({
+              ...input,
+              socketPath: "/synthetic/socket",
+              waitUntilReady: async () => undefined,
+            })
+          : createLoopbackOfficialAppServerListener(input);
+      const listening = listener.listen();
+      if (transport === "loopback") child.stderr.write("listening on: ws://127.0.0.1:40001\n");
+      await listening;
+      const exited = vi.fn();
+      void listener.closed.then(exited);
+      child.emit("error", new Error("kill EPERM"));
+      const failure = expect(listener.close()).rejects.toBeInstanceOf(
+        OfficialProcessStopTimeoutError,
+      );
+      await vi.advanceTimersByTimeAsync(20);
+      await failure;
+      expect(diagnostics).toContain("exit unconfirmed");
+      expect(exited).not.toHaveBeenCalled();
+      child.emit("exit", null, "SIGKILL");
+      await expect(listener.closed).resolves.toMatchObject({ signal: "SIGKILL" });
+      await expect(listener.close()).resolves.toBeUndefined();
+      expect(child.kill).toHaveBeenCalledTimes(2);
+    },
+  );
+});

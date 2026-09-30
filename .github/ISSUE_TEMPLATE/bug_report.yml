@@ -1,0 +1,109 @@
+name: Bug report
+description: Report a problem in codex-z, Desktop integration, or Harness use.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Enter 'unknown' for unknown versions and explain fields that do not apply.
+        Keep Harness, Model, and Account distinct. Do not upload Tokens, Cookies, authentication files, or logs that expose sensitive data.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which area is mainly affected? Select Other / Unknown if you are unsure.
+      options:
+        - Other / Unknown
+        - Desktop / Renderer
+        - Harness Adapter
+        - Thread / History
+        - Accounts / Usage
+        - Install / Update
+        - Remote
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the problem and its effect.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to see?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened? You can attach screenshots or error text with sensitive data removed.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Give minimum reproduction steps. For intermittent problems, state the observed trigger conditions.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: codex-z version
+      placeholder: "For example, 0.6.1 or a source commit SHA. State if unknown."
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Codex Desktop version
+      description: Give the full version and build where possible. This is not the Model name.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / Architecture
+      placeholder: "For example, Windows 11 x64, macOS arm64, Ubuntu 22.04 arm64"
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation
+      options:
+        - npm
+        - macOS DMG
+        - Windows installer
+        - Source
+        - Other / Unknown
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Harness / Version
+      description: For example, Codex, Claude Code, or Pi and its native CLI version. This is not the Model name.
+      placeholder: "Harness name and version, or not applicable / unknown"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      options:
+        - Local
+        - SSH
+        - Remote Control
+        - Other / Unknown
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs / Screenshots
+      description: Optional. Include only relevant excerpts. Remove credentials, personal information, and private project content.

@@ -1,0 +1,23 @@
+{
+  "name": "@codex-z/renderer-extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@codex-z/desktop-control": "0.0.0",
+    "@codex-z/shared-contracts": "0.0.0",
+    "lucide": "1.28.0"
+  }
+}

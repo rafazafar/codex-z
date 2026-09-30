@@ -1,0 +1,586 @@
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+
+import type { HostSubagentState, HostThreadSnapshot } from "@codex-z/harness-adapter";
+import {
+  MappingStore,
+  type CommitReadyThreadInput,
+  type CreateDelegationInput,
+  type CreateProvisionalThreadInput,
+  type DelegationStatus,
+  type FindRecentDelegationInput,
+  type RebindSubagentSessionInput,
+  type ReplaceReadySessionAfterLastTurnInput,
+  type ReplaceReadySessionInput,
+  type StoredDelegationRecordV1,
+  type StoredThreadRecordV1,
+  type StoredTurnMappingV1,
+  type ThreadMetadataPatch,
+} from "@codex-z/mapping-store";
+import type { JsonObject } from "@codex-z/protocol-core";
+import {
+  hostThreadIdSchema,
+  hostTurnIdSchema,
+  type HostThreadId,
+  type NativeCheckpointRef,
+  type NativeSessionRef,
+  type NativeTurnRef,
+} from "@codex-z/shared-contracts";
+import {
+  materializeExternalSubagent,
+  projectExternalSnapshot,
+} from "./external-subagent-threads.js";
+
+export interface ExternalThreadStore {
+  initialize(): Promise<void>;
+  getThread(hostThreadId: HostThreadId): Promise<StoredThreadRecordV1 | null>;
+  listThreads(): Promise<StoredThreadRecordV1[]>;
+  getThreadByCreateRequest(createRequestId: string): Promise<StoredThreadRecordV1 | null>;
+  getDelegation(delegationId: HostThreadId): Promise<StoredDelegationRecordV1 | null>;
+  getDelegationByChild(childHostThreadId: HostThreadId): Promise<StoredDelegationRecordV1 | null>;
+  findDelegationByRequest(requestId: string): Promise<StoredDelegationRecordV1 | null>;
+  findRecentDelegation(input: FindRecentDelegationInput): Promise<StoredDelegationRecordV1 | null>;
+  listDelegations(parentHostThreadId?: HostThreadId): Promise<StoredDelegationRecordV1[]>;
+  createDelegation(input: CreateDelegationInput): Promise<StoredDelegationRecordV1>;
+  setDelegationStatus(
+    delegationId: HostThreadId,
+    status: DelegationStatus,
+  ): Promise<StoredDelegationRecordV1>;
+  removeDelegation(delegationId: HostThreadId): Promise<void>;
+  createProvisional(input: CreateProvisionalThreadInput): Promise<StoredThreadRecordV1>;
+  commitReady(input: CommitReadyThreadInput): Promise<StoredThreadRecordV1>;
+  rebindSubagentSession(input: RebindSubagentSessionInput): Promise<StoredThreadRecordV1>;
+  replaceReadySession(input: ReplaceReadySessionInput): Promise<StoredThreadRecordV1>;
+  replaceReadySessionAfterLastTurn(
+    input: ReplaceReadySessionAfterLastTurnInput,
+  ): Promise<StoredThreadRecordV1>;
+  upsertTurnMappings(
+    hostThreadId: HostThreadId,
+    mappings: StoredTurnMappingV1[],
+  ): Promise<StoredThreadRecordV1>;
+  reconcileTurnMappings(
+    hostThreadId: HostThreadId,
+    mappings: StoredTurnMappingV1[],
+  ): Promise<StoredThreadRecordV1>;
+  setTitle(hostThreadId: HostThreadId, title: string): Promise<StoredThreadRecordV1>;
+  setTransportModelId(
+    hostThreadId: HostThreadId,
+    transportModelId: string,
+  ): Promise<StoredThreadRecordV1>;
+  setArchived(hostThreadId: HostThreadId, archived: boolean): Promise<StoredThreadRecordV1>;
+  updateMetadata(
+    hostThreadId: HostThreadId,
+    patch: ThreadMetadataPatch,
+    options?: { ifProjectId?: string },
+  ): Promise<StoredThreadRecordV1>;
+  removeProvisional(hostThreadId: HostThreadId): Promise<void>;
+  removeThread(hostThreadId: HostThreadId): Promise<void>;
+  close(): Promise<void>;
+}
+
+export interface AlignedExternalSnapshot {
+  record: StoredThreadRecordV1;
+  turns: JsonObject[];
+}
+
+function nativeTurnKey(ref: NativeTurnRef): string {
+  return `${ref.harnessId}\u0000${ref.nativeSessionId}\u0000${ref.nativeTurnKey}\u0000${ref.formatVersion}`;
+}
+
+function sameMapping(left: StoredTurnMappingV1, right: StoredTurnMappingV1): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function defaultMappingStoreDirectory(environment: NodeJS.ProcessEnv): string {
+  const dataDirectory = environment.CODEX_Z_DATA_DIR;
+  return path.join(
+    dataDirectory ? path.resolve(dataDirectory) : path.join(os.homedir(), ".codex-z"),
+    "mapping-store",
+  );
+}
+
+export function createProductionExternalThreadStore(
+  environment: NodeJS.ProcessEnv,
+): ExternalThreadStore {
+  return new MappingStore({ directory: defaultMappingStoreDirectory(environment) });
+}
+
+export class ExternalThreadRepository {
+  constructor(private readonly store: ExternalThreadStore) {}
+
+  initialize(): Promise<void> {
+    return this.store.initialize();
+  }
+
+  close(): Promise<void> {
+    return this.store.close();
+  }
+
+  async find(threadId: string): Promise<StoredThreadRecordV1 | null> {
+    const parsed = hostThreadIdSchema.safeParse(threadId);
+    return parsed.success ? this.store.getThread(parsed.data) : null;
+  }
+
+  list(): Promise<StoredThreadRecordV1[]> {
+    return this.store.listThreads();
+  }
+
+  materializeSubagent(parent: StoredThreadRecordV1, child: HostSubagentState) {
+    return materializeExternalSubagent(this.store, parent, child);
+  }
+
+  findByCreateRequest(createRequestId: string): Promise<StoredThreadRecordV1 | null> {
+    return this.store.getThreadByCreateRequest(createRequestId);
+  }
+
+  getDelegation(delegationId: HostThreadId): Promise<StoredDelegationRecordV1 | null> {
+    return this.store.getDelegation(delegationId);
+  }
+
+  getDelegationByChild(childHostThreadId: HostThreadId): Promise<StoredDelegationRecordV1 | null> {
+    return this.store.getDelegationByChild(childHostThreadId);
+  }
+
+  findDelegationByRequest(requestId: string): Promise<StoredDelegationRecordV1 | null> {
+    return this.store.findDelegationByRequest(requestId);
+  }
+
+  findRecentDelegation(input: FindRecentDelegationInput): Promise<StoredDelegationRecordV1 | null> {
+    return this.store.findRecentDelegation(input);
+  }
+
+  listDelegations(parentHostThreadId?: HostThreadId): Promise<StoredDelegationRecordV1[]> {
+    return this.store.listDelegations(parentHostThreadId);
+  }
+
+  createDelegation(input: CreateDelegationInput): Promise<StoredDelegationRecordV1> {
+    return this.store.createDelegation(input);
+  }
+
+  setDelegationStatus(
+    delegationId: HostThreadId,
+    status: DelegationStatus,
+  ): Promise<StoredDelegationRecordV1> {
+    return this.store.setDelegationStatus(delegationId, status);
+  }
+
+  removeDelegation(delegationId: HostThreadId): Promise<void> {
+    return this.store.removeDelegation(delegationId);
+  }
+
+  createProvisional(input: CreateProvisionalThreadInput): Promise<StoredThreadRecordV1> {
+    return this.store.createProvisional(input);
+  }
+
+  commitNative(
+    hostThreadId: HostThreadId,
+    nativeSessionRef: NativeSessionRef,
+    turnMappings: StoredTurnMappingV1[] = [],
+  ): Promise<StoredThreadRecordV1> {
+    return this.store.commitReady({ hostThreadId, nativeSessionRef, turnMappings });
+  }
+
+  setTitle(hostThreadId: HostThreadId, title: string): Promise<StoredThreadRecordV1> {
+    return this.store.setTitle(hostThreadId, title);
+  }
+
+  setTransportModelId(
+    hostThreadId: HostThreadId,
+    transportModelId: string,
+  ): Promise<StoredThreadRecordV1> {
+    return this.store.setTransportModelId(hostThreadId, transportModelId);
+  }
+
+  setArchived(hostThreadId: HostThreadId, archived: boolean): Promise<StoredThreadRecordV1> {
+    return this.store.setArchived(hostThreadId, archived);
+  }
+
+  updateMetadata(
+    hostThreadId: HostThreadId,
+    patch: ThreadMetadataPatch,
+    options?: { ifProjectId?: string },
+  ): Promise<StoredThreadRecordV1> {
+    return this.store.updateMetadata(hostThreadId, patch, options);
+  }
+
+  removeProvisional(hostThreadId: HostThreadId): Promise<void> {
+    return this.store.removeProvisional(hostThreadId);
+  }
+
+  removeThread(hostThreadId: HostThreadId): Promise<void> {
+    return this.store.removeThread(hostThreadId);
+  }
+
+  async persistTurn(
+    record: StoredThreadRecordV1,
+    hostTurnId: StoredTurnMappingV1["hostTurnId"],
+    nativeTurnRef: NativeTurnRef,
+    nativeCheckpointRef?: NativeCheckpointRef,
+  ): Promise<StoredThreadRecordV1> {
+    if (
+      record.state !== "ready" ||
+      !record.nativeSessionRef ||
+      nativeTurnRef.harnessId !== record.harnessId ||
+      nativeTurnRef.nativeSessionId !== record.nativeSessionRef.nativeSessionId ||
+      (nativeCheckpointRef &&
+        (nativeCheckpointRef.harnessId !== record.harnessId ||
+          nativeCheckpointRef.nativeSessionId !== record.nativeSessionRef.nativeSessionId))
+    ) {
+      throw new Error("Live Turn identity does not belong to the stored Thread");
+    }
+    return this.store.upsertTurnMappings(record.hostThreadId, [
+      {
+        hostTurnId,
+        nativeTurnRef,
+        ...(nativeCheckpointRef ? { nativeCheckpointRef } : {}),
+      },
+    ]);
+  }
+
+  async commitDerivedSnapshot(
+    record: StoredThreadRecordV1,
+    nativeSessionRef: NativeSessionRef,
+    snapshot: HostThreadSnapshot,
+  ): Promise<AlignedExternalSnapshot> {
+    if (record.state !== "creating" || record.turnMappings.length !== 0) {
+      throw new Error("Derived Thread must be provisional before Snapshot commit");
+    }
+    const mappings = snapshot.turns.map((turn): StoredTurnMappingV1 => {
+      if (
+        turn.nativeTurnRef.harnessId !== record.harnessId ||
+        turn.nativeTurnRef.nativeSessionId !== nativeSessionRef.nativeSessionId ||
+        (turn.checkpoint &&
+          (turn.checkpoint.harnessId !== record.harnessId ||
+            turn.checkpoint.nativeSessionId !== nativeSessionRef.nativeSessionId))
+      ) {
+        throw new Error("Derived Snapshot identity does not belong to its Native Session");
+      }
+      return {
+        hostTurnId: hostTurnIdSchema.parse(randomUUID()),
+        nativeTurnRef: turn.nativeTurnRef,
+        ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
+      };
+    });
+    const nextRecord = await this.store.commitReady({
+      hostThreadId: record.hostThreadId,
+      nativeSessionRef,
+      turnMappings: mappings,
+    });
+    return {
+      record: nextRecord,
+      turns: await projectExternalSnapshot(this.store, nextRecord, snapshot),
+    };
+  }
+
+  async commitForkRollback(
+    derived: StoredThreadRecordV1,
+    source: StoredThreadRecordV1,
+    nativeSessionRef: NativeSessionRef,
+    snapshot: HostThreadSnapshot,
+  ): Promise<AlignedExternalSnapshot> {
+    if (
+      derived.state !== "ready" ||
+      !derived.nativeSessionRef ||
+      source.state !== "ready" ||
+      !source.nativeSessionRef ||
+      !derived.forkSource ||
+      derived.forkSource.hostThreadId !== source.hostThreadId ||
+      derived.harnessId !== source.harnessId
+    ) {
+      throw new Error("External rollback lineage is not a ready source prefix");
+    }
+    const sourceBoundaryIndex = source.turnMappings.findIndex(
+      ({ hostTurnId }) => hostTurnId === derived.forkSource?.hostTurnId,
+    );
+    const retainedCount = snapshot.turns.length;
+    if (
+      sourceBoundaryIndex < 0 ||
+      derived.turnMappings.length !== sourceBoundaryIndex + 1 ||
+      retainedCount < 1 ||
+      retainedCount >= derived.turnMappings.length
+    ) {
+      throw new Error("External rollback does not retain an exact shorter source prefix");
+    }
+    const selectedSource = source.turnMappings[retainedCount - 1];
+    if (!selectedSource?.nativeCheckpointRef) {
+      throw new Error("External rollback source Checkpoint is unavailable");
+    }
+    if (
+      nativeSessionRef.harnessId !== derived.harnessId ||
+      nativeSessionRef.nativeSessionId === derived.nativeSessionRef.nativeSessionId ||
+      nativeSessionRef.nativeSessionId === source.nativeSessionRef.nativeSessionId
+    ) {
+      throw new Error("External rollback did not create a distinct Native Session");
+    }
+
+    const mappings = snapshot.turns.map((turn, index): StoredTurnMappingV1 => {
+      const previous = derived.turnMappings[index];
+      if (
+        !previous ||
+        turn.nativeTurnRef.harnessId !== derived.harnessId ||
+        turn.nativeTurnRef.nativeSessionId !== nativeSessionRef.nativeSessionId ||
+        (turn.checkpoint &&
+          (turn.checkpoint.harnessId !== derived.harnessId ||
+            turn.checkpoint.nativeSessionId !== nativeSessionRef.nativeSessionId))
+      ) {
+        throw new Error("External rollback Snapshot identity is invalid");
+      }
+      return {
+        hostTurnId: previous.hostTurnId,
+        nativeTurnRef: turn.nativeTurnRef,
+        ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
+      };
+    });
+    const nextRecord = await this.store.replaceReadySession({
+      hostThreadId: derived.hostThreadId,
+      expectedRevision: derived.revision,
+      expectedNativeSessionRef: derived.nativeSessionRef,
+      nativeSessionRef,
+      turnMappings: mappings,
+      forkSource: {
+        hostThreadId: source.hostThreadId,
+        hostTurnId: selectedSource.hostTurnId,
+      },
+    });
+    return {
+      record: nextRecord,
+      turns: await projectExternalSnapshot(this.store, nextRecord, snapshot, derived),
+    };
+  }
+
+  async commitLastTurnRollback(
+    current: StoredThreadRecordV1,
+    nativeSessionRef: NativeSessionRef,
+    snapshot: HostThreadSnapshot,
+  ): Promise<AlignedExternalSnapshot> {
+    if (
+      current.state !== "ready" ||
+      !current.nativeSessionRef ||
+      nativeSessionRef.harnessId !== current.harnessId ||
+      snapshot.turns.length !== current.turnMappings.length - 1
+    ) {
+      throw new Error("Last-Turn rollback is not an exact ready Session replacement");
+    }
+    const mappings = snapshot.turns.map((turn, index): StoredTurnMappingV1 => {
+      const previous = current.turnMappings[index];
+      if (
+        !previous ||
+        turn.nativeTurnRef.harnessId !== current.harnessId ||
+        turn.nativeTurnRef.nativeSessionId !== nativeSessionRef.nativeSessionId ||
+        (turn.checkpoint &&
+          (turn.checkpoint.harnessId !== current.harnessId ||
+            turn.checkpoint.nativeSessionId !== nativeSessionRef.nativeSessionId))
+      ) {
+        throw new Error("Last-Turn rollback Snapshot identity is invalid");
+      }
+      return {
+        hostTurnId: previous.hostTurnId,
+        nativeTurnRef: turn.nativeTurnRef,
+        ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
+      };
+    });
+    const nextRecord = await this.store.replaceReadySessionAfterLastTurn({
+      hostThreadId: current.hostThreadId,
+      expectedRevision: current.revision,
+      expectedNativeSessionRef: current.nativeSessionRef,
+      nativeSessionRef,
+      turnMappings: mappings,
+    });
+    return {
+      record: nextRecord,
+      turns: await projectExternalSnapshot(this.store, nextRecord, snapshot, current),
+    };
+  }
+
+  async sessionTreeId(record: StoredThreadRecordV1): Promise<string> {
+    let current = record;
+    const visited = new Set<string>();
+    while (current.subagent || current.forkSource) {
+      if (visited.has(current.hostThreadId))
+        throw new Error("External Thread Fork tree contains a cycle");
+      visited.add(current.hostThreadId);
+      const parentId = current.subagent?.parentHostThreadId ?? current.forkSource?.hostThreadId;
+      if (!parentId) break;
+      const source = await this.find(parentId);
+      if (!source) break;
+      current = source;
+    }
+    return current.hostThreadId;
+  }
+
+  async alignSnapshot(
+    record: StoredThreadRecordV1,
+    snapshot: HostThreadSnapshot,
+  ): Promise<AlignedExternalSnapshot> {
+    const nativeSessionRef = record.nativeSessionRef;
+    if (!nativeSessionRef || record.state !== "ready") {
+      throw new Error("External Thread has no committed Native Session identity");
+    }
+    for (const turn of snapshot.turns) {
+      if (
+        turn.nativeTurnRef.harnessId !== record.harnessId ||
+        turn.nativeTurnRef.nativeSessionId !== nativeSessionRef.nativeSessionId ||
+        (turn.checkpoint &&
+          (turn.checkpoint.harnessId !== record.harnessId ||
+            turn.checkpoint.nativeSessionId !== nativeSessionRef.nativeSessionId))
+      ) {
+        throw new Error("External Snapshot identity does not belong to the stored Thread");
+      }
+    }
+
+    const mappingsByNative = new Map(
+      record.turnMappings.map(
+        (mapping) => [nativeTurnKey(mapping.nativeTurnRef), mapping] as const,
+      ),
+    );
+    const aligned = snapshot.turns.map((turn) => {
+      const existing = mappingsByNative.get(nativeTurnKey(turn.nativeTurnRef));
+      const mapping =
+        existing ??
+        ({
+          hostTurnId: hostTurnIdSchema.parse(randomUUID()),
+          nativeTurnRef: turn.nativeTurnRef,
+          ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
+        } satisfies StoredTurnMappingV1);
+      return {
+        snapshot: turn,
+        mapping: {
+          ...mapping,
+          nativeTurnRef: turn.nativeTurnRef,
+          ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
+        },
+      };
+    });
+
+    const orderedMappings = aligned.map(({ mapping }) => mapping);
+    const mappingsChanged =
+      orderedMappings.length !== record.turnMappings.length ||
+      orderedMappings.some((mapping, index) => {
+        const persisted = record.turnMappings[index];
+        return !persisted || !sameMapping(mapping, persisted);
+      });
+    const nextRecord = mappingsChanged
+      ? await this.store.reconcileTurnMappings(record.hostThreadId, orderedMappings)
+      : record;
+    return {
+      record: nextRecord,
+      turns: await projectExternalSnapshot(this.store, nextRecord, snapshot),
+    };
+  }
+}
+
+export function createExternalThreadRecordInput(input: {
+  hostThreadId?: HostThreadId;
+  createRequestId?: string;
+  harnessId: CreateProvisionalThreadInput["harnessId"];
+  cwd: string;
+  title?: string;
+  transportModelId: string;
+  ephemeral: boolean;
+  historyMode: "legacy" | "paginated";
+  forkSource?: CreateProvisionalThreadInput["forkSource"];
+  subagent?: CreateProvisionalThreadInput["subagent"];
+}): CreateProvisionalThreadInput {
+  return {
+    hostThreadId: input.hostThreadId ?? hostThreadIdSchema.parse(randomUUID()),
+    createRequestId: input.createRequestId ?? randomUUID(),
+    harnessId: input.harnessId,
+    cwd: input.cwd,
+    ...(input.title ? { title: input.title } : {}),
+    transportModelId: input.transportModelId,
+    ephemeral: input.ephemeral,
+    historyMode: input.historyMode,
+    ...(input.forkSource ? { forkSource: input.forkSource } : {}),
+    ...(input.subagent ? { subagent: input.subagent } : {}),
+  };
+}
+
+export function externalThreadValue(input: {
+  record: StoredThreadRecordV1;
+  turns: JsonObject[];
+  sessionId: string;
+  running?: boolean;
+  loaded?: boolean;
+}): JsonObject {
+  const { record } = input;
+  const createdAt = Math.floor(Date.parse(record.createdAt) / 1_000);
+  const updatedAt = Math.floor(Date.parse(record.updatedAt) / 1_000);
+  const preview = input.turns
+    .flatMap((turn) => (Array.isArray(turn.items) ? turn.items : []))
+    .find(
+      (item) =>
+        typeof item === "object" &&
+        item !== null &&
+        !Array.isArray(item) &&
+        item.type === "userMessage",
+    );
+  const previewContent =
+    typeof preview === "object" && preview !== null && !Array.isArray(preview)
+      ? preview.content
+      : null;
+  const previewText = Array.isArray(previewContent)
+    ? previewContent
+        .filter(
+          (part): part is JsonObject =>
+            typeof part === "object" &&
+            part !== null &&
+            !Array.isArray(part) &&
+            part.type === "text",
+        )
+        .map((part) => (typeof part.text === "string" ? part.text : ""))
+        .join("\n")
+    : "";
+  return {
+    id: record.hostThreadId,
+    sessionId: input.sessionId,
+    path: null,
+    cwd: record.cwd,
+    source: record.subagent
+      ? {
+          subAgent: {
+            thread_spawn: {
+              parent_thread_id: record.subagent.parentHostThreadId,
+              depth: 1,
+              agent_path: null,
+              agent_nickname: record.title || null,
+              agent_role: record.subagent.role ?? null,
+            },
+          },
+        }
+      : "vscode",
+    threadSource: record.subagent ? "subAgentThreadSpawn" : null,
+    modelProvider: "codex-z",
+    cliVersion: "codex-z",
+    createdAt,
+    updatedAt,
+    recencyAt: updatedAt,
+    status:
+      input.loaded === false
+        ? { type: "notLoaded" }
+        : input.running
+          ? { type: "active", activeFlags: [] }
+          : { type: "idle" },
+    turns: input.turns,
+    preview: previewText,
+    name: record.title || null,
+    gitInfo: record.gitInfo
+      ? {
+          branch: record.gitInfo.branch ?? null,
+          originUrl: record.gitInfo.originUrl ?? null,
+          sha: record.gitInfo.sha ?? null,
+        }
+      : null,
+    forkedFromId: record.forkSource?.hostThreadId ?? null,
+    parentThreadId: record.subagent?.parentHostThreadId ?? null,
+    ephemeral: record.ephemeral,
+    canAcceptDirectInput: record.subagent ? false : input.loaded === false ? null : true,
+    historyMode: record.historyMode,
+    isPinned: false,
+    projectId: record.projectId ?? null,
+    daybreakEnabled: record.daybreakEnabled ?? null,
+    agentNickname: record.subagent ? record.title || null : null,
+    agentRole: record.subagent?.role ?? null,
+    extra: null,
+  };
+}

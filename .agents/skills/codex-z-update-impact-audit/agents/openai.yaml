@@ -1,0 +1,4 @@
+interface:
+  display_name: "codex-z Update Impact Audit"
+  short_description: "Audit Codex Desktop updates for codex-z impact"
+  default_prompt: "Use $codex-z-update-impact-audit to audit this Codex Desktop update for codex-z compatibility risks."

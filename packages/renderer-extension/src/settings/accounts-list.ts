@@ -1,0 +1,307 @@
+import type { CodexAccountSummary, HarnessAccountListResult } from "@codex-z/shared-contracts";
+
+import { KNOWN_RENDERER_AGENTS } from "../agent-selection-state.js";
+import { createRendererAgentIcon } from "../renderer-agent-icon.js";
+import { codexAccountDisplayName } from "../renderer-codex-account-options.js";
+import {
+  accountUsageColumnLabel,
+  renderAccountResetCredits,
+  renderAccountUsage,
+  type AccountUsageDisplay,
+  type AccountUsageViewState,
+} from "./accounts-usage.js";
+import type { RendererSettingsMessages } from "./localization.js";
+
+let resetDetailsSequence = 0;
+
+export function accountPlanLabel(planType: CodexAccountSummary["planType"]): string | null {
+  if (!planType || planType === "unknown") return null;
+  if (planType === "free") return "Free";
+  if (planType === "go") return "Go";
+  if (planType === "plus") return "Plus";
+  if (planType === "pro") return "Pro 20x";
+  if (planType === "prolite") return "Pro 5x";
+  if (planType === "team") return "Team";
+  if (planType === "self_serve_business_prolite") return "Business Pro Lite";
+  if (planType === "self_serve_business_usage_based") return "Business";
+  if (planType === "business") return "Business";
+  if (planType === "edu") return "Edu";
+  if (planType === "edu_plus") return "Edu Plus";
+  if (planType === "edu_pro") return "Edu Pro";
+  return "Enterprise";
+}
+
+/** Preserve keyboard position when an async update replaces the table body. */
+export function accountListFocusRestorer(list: HTMLElement, fallback: HTMLElement): () => void {
+  const active = (list.getRootNode() as Document | ShadowRoot).activeElement;
+  if (!active || !list.contains(active)) return () => undefined;
+  const key = active.getAttribute("data-account-focus");
+  const accountId = active.closest<HTMLElement>(".settings-account-row")?.dataset.accountId;
+  return () => {
+    const target = key
+      ? list.querySelector<HTMLElement>(`[data-account-focus="${CSS.escape(key)}"]`)
+      : null;
+    if (target && !target.matches(":disabled")) {
+      const dialog = target.closest("dialog");
+      if (dialog && !dialog.open) dialog.showModal();
+      target.focus({ preventScroll: true });
+      return;
+    }
+    // An action may be disabled while pending or disappear after success.
+    // Keep focus with its Account; use the page fallback only if that row is gone.
+    const row = accountId
+      ? list.querySelector<HTMLElement>(
+          `.settings-account-row[data-account-id="${CSS.escape(accountId)}"]`,
+        )
+      : null;
+    (row ?? fallback).focus({ preventScroll: true });
+  };
+}
+
+export function createAccountsTable(document: Document, messages: RendererSettingsMessages) {
+  const table = document.createElement("table");
+  table.className = "settings-account-table";
+  table.setAttribute("aria-label", messages.pageLabels.accounts);
+  const head = document.createElement("thead");
+  const row = document.createElement("tr");
+  const headers = Array.from({ length: 4 }, () => {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    row.append(cell);
+    return cell;
+  });
+  const updateDisplay = (display: AccountUsageDisplay): void => {
+    const labels = [
+      messages.accountColumnAccount,
+      accountUsageColumnLabel("five_hour", display, messages),
+      accountUsageColumnLabel("seven_day", display, messages),
+      messages.credentialImports.column,
+    ];
+    headers.forEach((cell, index) => {
+      cell.textContent = labels[index] ?? "";
+    });
+  };
+  updateDisplay("remaining");
+  head.append(row);
+  const body = document.createElement("tbody");
+  table.append(head, body);
+  return { table, body, updateDisplay };
+}
+
+function createAccountPerson(
+  document: Document,
+  messages: RendererSettingsMessages,
+  input: {
+    name: string;
+    agent: string;
+    plan: string | null;
+    highlighted?: boolean;
+    active?: boolean;
+    mark: HTMLElement;
+  },
+): HTMLElement {
+  const person = document.createElement("div");
+  person.className = "settings-account-row__person";
+  const identity = document.createElement("div");
+  identity.className = "settings-account-row__identity";
+  const title = document.createElement("strong");
+  title.className = "settings-account-email";
+  title.textContent = input.name;
+  title.title = input.name;
+  title.translate = false;
+  const metadata = document.createElement("div");
+  metadata.className = "settings-account-metadata";
+  const agent = document.createElement("span");
+  agent.textContent = input.agent;
+  agent.translate = false;
+  if (input.name !== input.agent) metadata.append(agent);
+  if (input.plan) {
+    if (metadata.childElementCount) {
+      const separator = document.createElement("span");
+      separator.textContent = "·";
+      separator.setAttribute("aria-hidden", "true");
+      metadata.append(separator);
+    }
+    const plan = document.createElement("span");
+    plan.className = input.highlighted
+      ? "settings-account-plan settings-account-plan--highlighted"
+      : "settings-account-plan";
+    plan.textContent = input.plan;
+    plan.translate = false;
+    metadata.append(plan);
+  }
+  if (input.active) {
+    const badge = document.createElement("span");
+    badge.className = "settings-account-active";
+    badge.textContent = messages.accountDefaultBadge;
+    badge.title = messages.accountDefaultHint;
+    metadata.append(badge);
+  }
+  identity.append(title);
+  if (metadata.childElementCount) identity.append(metadata);
+  person.append(input.mark, identity);
+  return person;
+}
+
+/**
+ * The last column only ever holds the Harness target mark(s) a login can be copied to. Rows with no
+ * verified-compatible target keep an empty cell so the table columns stay aligned.
+ */
+function createTargetCell(
+  document: Document,
+  action: HTMLElement | null | undefined,
+): HTMLTableCellElement {
+  const cell = document.createElement("td");
+  cell.className = action
+    ? "settings-account-management-cell"
+    : "settings-account-management-cell settings-account-management-cell--empty";
+  if (action) cell.append(action);
+  return cell;
+}
+
+export function renderAccountRows(
+  document: Document,
+  account: CodexAccountSummary,
+  messages: RendererSettingsMessages,
+  input: {
+    current: boolean;
+    usage: AccountUsageViewState | undefined;
+    display: AccountUsageDisplay;
+    resetExpanded: boolean;
+    onRetry: () => void;
+    importAction?: HTMLElement | null;
+    onResetExpanded: (open: boolean) => void;
+  },
+): HTMLTableRowElement[] {
+  const row = document.createElement("tr");
+  row.className = "settings-account-row";
+  row.dataset.accountId = account.accountId;
+  row.dataset.accountFocus = `${account.accountId}:row`;
+  row.tabIndex = -1;
+  const name = codexAccountDisplayName(account);
+  row.setAttribute("aria-label", name.full);
+  const personCell = document.createElement("td");
+  personCell.className = "settings-account-person-cell";
+  const mark = document.createElement("div");
+  mark.className = "settings-harness-account__logo";
+  mark.dataset.agent = "codex";
+  mark.setAttribute("aria-hidden", "true");
+  mark.append(createRendererAgentIcon("codex", 26, document));
+  personCell.append(
+    createAccountPerson(document, messages, {
+      name: name.full,
+      agent: "Codex",
+      plan: accountPlanLabel(account.planType),
+      highlighted: account.planType === "pro" || account.planType === "prolite",
+      active: input.current,
+      mark,
+    }),
+  );
+  // Codex Pro 20x exposes extra model-scoped limits; this page intentionally shows only its
+  // generic weekly allowance so the Account row has one comparable quota.
+  const usage = renderAccountUsage(
+    document,
+    input.usage,
+    messages,
+    input.display,
+    input.onRetry,
+    account.planType === "pro" ? "weekly-only" : "all",
+  );
+  if (usage.additional) personCell.append(usage.additional);
+  const actionsCell = createTargetCell(document, input.importAction);
+  if (input.importAction) row.className += " settings-account-row--targets";
+  const continuationRows = usage.continuationCells.map((cells) => {
+    const continuation = document.createElement("tr");
+    continuation.className = "settings-account-row settings-account-quota-continuation-row";
+    continuation.dataset.accountId = account.accountId;
+    continuation.append(...cells);
+    return continuation;
+  });
+  if (continuationRows.length > 0) {
+    personCell.rowSpan = continuationRows.length + 1;
+    personCell.className += " settings-account-spanning-cell";
+    actionsCell.rowSpan = continuationRows.length + 1;
+    actionsCell.className += " settings-account-spanning-cell";
+  }
+  row.append(personCell, ...usage.cells, actionsCell);
+  const reset =
+    input.usage?.status === "ready"
+      ? renderAccountResetCredits(document, input.usage.credits, messages)
+      : null;
+  if (!reset) return [row, ...continuationRows];
+  const detailsRow = document.createElement("tr");
+  detailsRow.className = "settings-account-details-row";
+  detailsRow.id = `settings-account-reset-${++resetDetailsSequence}`;
+  detailsRow.hidden = !input.resetExpanded;
+  const detailsCell = document.createElement("td");
+  detailsCell.colSpan = 4;
+  detailsCell.append(reset.details);
+  detailsRow.append(detailsCell);
+  reset.summary.dataset.accountFocus = `${account.accountId}:reset`;
+  reset.summary.setAttribute("aria-controls", detailsRow.id);
+  reset.summary.setAttribute("aria-expanded", String(input.resetExpanded));
+  reset.summary.addEventListener("click", () => {
+    detailsRow.hidden = !detailsRow.hidden;
+    reset.summary.setAttribute("aria-expanded", String(!detailsRow.hidden));
+    input.onResetExpanded(!detailsRow.hidden);
+  });
+  personCell.append(reset.summary);
+  return [row, ...continuationRows, detailsRow];
+}
+
+export function renderHarnessAccountRows(
+  document: Document,
+  account: HarnessAccountListResult["accounts"][number],
+  messages: RendererSettingsMessages,
+  display: AccountUsageDisplay,
+  importAction?: HTMLElement | null,
+): HTMLTableRowElement[] {
+  const row = document.createElement("tr");
+  row.className = "settings-account-row";
+  row.dataset.harnessId = account.harnessId;
+  row.tabIndex = -1;
+  const name = account.email ?? account.label ?? account.harnessName;
+  row.setAttribute("aria-label", name);
+  const personCell = document.createElement("td");
+  personCell.className = "settings-account-person-cell";
+  const logo = document.createElement("div");
+  logo.className = "settings-harness-account__logo";
+  logo.setAttribute("aria-hidden", "true");
+  const agent = KNOWN_RENDERER_AGENTS.find((agent) => agent === account.harnessId);
+  if (agent) logo.append(createRendererAgentIcon(agent, 26, document));
+  personCell.append(
+    createAccountPerson(document, messages, {
+      name,
+      agent: account.harnessName,
+      plan: account.plan ?? null,
+      mark: logo,
+    }),
+  );
+  const usage = renderAccountUsage(
+    document,
+    { status: "ready", credits: account.credits, freshness: "live", observedAt: null },
+    messages,
+    display,
+    () => undefined,
+    account.harnessId === "grok" ? "weekly-only" : "all",
+  );
+  if (usage.additional) personCell.append(usage.additional);
+  const managementCell = createTargetCell(document, importAction);
+  if (importAction) row.className += " settings-account-row--targets";
+  personCell.title = messages.accountNativeManagementHint.replace("{harness}", account.harnessName);
+  const continuationRows = usage.continuationCells.map((cells) => {
+    const continuation = document.createElement("tr");
+    continuation.className = "settings-account-row settings-account-quota-continuation-row";
+    continuation.dataset.harnessId = account.harnessId;
+    continuation.append(...cells);
+    return continuation;
+  });
+  if (continuationRows.length > 0) {
+    personCell.rowSpan = continuationRows.length + 1;
+    personCell.className += " settings-account-spanning-cell";
+    managementCell.rowSpan = continuationRows.length + 1;
+    managementCell.className += " settings-account-spanning-cell";
+  }
+  row.append(personCell, ...usage.cells, managementCell);
+  return [row, ...continuationRows];
+}

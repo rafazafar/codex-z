@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "platform": "windows",
+  "recordType": "invocation",
+  "timestampMs": 1784989842362,
+  "processId": 38884,
+  "parentProcessId": 13620,
+  "invocationKind": "app-server",
+  "args": ["-c", "features.code_mode_host=true", "app-server", "--analytics-default-enabled"],
+  "cwd": "<WORKING_DIRECTORY>",
+  "desktopVersion": "26.721.4979.0",
+  "stockCodexPath": "<STOCK_CODEX>",
+  "environmentPresence": {
+    "CODEX_CLI_PATH": true,
+    "CODEX_Z_STOCK_CODEX_PATH": true,
+    "CODEX_Z_PROBE_OUTPUT": true,
+    "CODEX_Z_DESKTOP_VERSION": true,
+    "CODEX_Z_INSTALL_ROOT": true
+  }
+}

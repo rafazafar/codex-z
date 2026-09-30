@@ -1,0 +1,132 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { OpenCodeAdapter } from "../src/index.js";
+
+const command = process.env.CODEX_Z_OPENCODE_REAL_COMMAND;
+
+describe.runIf(Boolean(command))("OpenCode Adapter real Server", () => {
+  it("inspects and opens an isolated latest-CLI Session without invoking a Model", async () => {
+    if (!command) throw new Error("CODEX_Z_OPENCODE_REAL_COMMAND is required");
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-z-opencode-real-"));
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(workspace, { recursive: true });
+    const adapter = new OpenCodeAdapter({
+      command,
+      startupTimeoutMs: 20_000,
+      commandTimeoutMs: 20_000,
+      environment: {
+        ...process.env,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          enabled_providers: ["codex-z-smoke"],
+          model: "codex-z-smoke/model",
+          provider: {
+            "codex-z-smoke": {
+              npm: "@ai-sdk/openai-compatible",
+              options: { apiKey: "test-only", baseURL: "http://127.0.0.1:1/v1" },
+              models: {
+                model: {
+                  name: "Smoke",
+                  variants: { high: { reasoningEffort: "high" } },
+                  limit: { context: 32000, output: 4000 },
+                },
+              },
+            },
+          },
+        }),
+        OPENCODE_TEST_HOME: path.join(root, "home"),
+        OPENCODE_CONFIG_DIR: path.join(root, "config"),
+        OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+        XDG_DATA_HOME: path.join(root, "data"),
+        XDG_CACHE_HOME: path.join(root, "cache"),
+        XDG_STATE_HOME: path.join(root, "state"),
+      },
+    });
+    try {
+      const inspection = await adapter.inspect({ cwd: workspace, refresh: true });
+      if (inspection.status !== "ready") {
+        throw new Error(`OpenCode inspection failed: ${JSON.stringify(inspection)}`);
+      }
+      expect(inspection).toMatchObject({
+        status: "ready",
+        capabilities: {
+          configuration: { selectPermissionMode: true },
+          history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
+        },
+      });
+      const opened = await adapter.open({
+        kind: "create",
+        cwd: workspace,
+        executionPolicy: "unattended-full-access",
+      });
+      if (!opened.ok) throw new Error(opened.error.message);
+      expect(opened.value.initialState).toMatchObject({
+        effectivePermissionModeId: "allow",
+      });
+      expect(opened.value.initialState.nativeRef).toMatchObject({
+        harnessId: "opencode",
+        locator: {
+          directory: await fs.realpath(workspace),
+          executionPolicy: "unattended-full-access",
+        },
+      });
+      await expect(opened.value.readSnapshot()).resolves.toMatchObject({
+        ok: true,
+        value: { turns: [] },
+      });
+      const model = inspection.catalog.defaultModel ?? inspection.catalog.models[0]?.ref;
+      expect(inspection.catalog.models).toHaveLength(1);
+      if (!model) throw new Error("Native model catalog did not load");
+      const thinking = inspection.catalog.thinkingOptions.find((v) => v.label === "high");
+      if (!thinking) throw new Error("Native Thinking options did not load");
+      {
+        await expect(opened.value.execute({ type: "model.select", model })).resolves.toEqual({
+          ok: true,
+          value: { completed: true },
+        });
+        await expect(opened.value.readSnapshot()).resolves.toMatchObject({
+          ok: true,
+          value: { state: { effectiveModel: model }, turns: [] },
+        });
+      }
+      await expect(
+        opened.value.execute({ type: "thinking.select", thinkingOptionId: thinking.id }),
+      ).resolves.toMatchObject({ ok: true });
+      await expect(
+        opened.value.execute({
+          type: "permissionMode.select",
+          permissionModeId: "ask" as never,
+        }),
+      ).resolves.toEqual({ ok: true, value: { completed: true } });
+      await expect(opened.value.readSnapshot()).resolves.toMatchObject({
+        ok: true,
+        value: { state: { effectivePermissionModeId: "ask" }, turns: [] },
+      });
+      if (!opened.value.commands) throw new Error("OpenCode Session did not expose commands");
+      await expect(opened.value.commands.list()).resolves.toMatchObject({ ok: true });
+      const nativeRef = opened.value.initialState.nativeRef;
+      if (!nativeRef) throw new Error("OpenCode Session did not expose a Native Ref");
+      await opened.value.close();
+      const resumed = await adapter.open({ kind: "resume", nativeRef, cwd: workspace });
+      if (!resumed.ok) throw new Error(resumed.error.message);
+      await expect(resumed.value.readSnapshot()).resolves.toMatchObject({
+        ok: true,
+        value: {
+          state: {
+            effectiveModel: model,
+            effectiveThinkingOptionId: thinking.id,
+            effectivePermissionModeId: "ask",
+          },
+          turns: [],
+        },
+      });
+      await resumed.value.close();
+    } finally {
+      await adapter.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 45_000);
+});

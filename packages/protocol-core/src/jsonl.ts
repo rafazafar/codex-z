@@ -1,0 +1,96 @@
+import type { Readable, Writable } from "node:stream";
+
+import { jsonValueSchema, type JsonValue } from "@codex-z/shared-contracts";
+
+const decoder = new TextDecoder("utf-8", { fatal: true });
+const newline = Buffer.from("\n");
+
+export async function* readLfFrames(
+  stream: Readable,
+  options: { maxFrameBytes?: number } = {},
+): AsyncGenerator<Buffer<ArrayBufferLike>> {
+  const maximum = options.maxFrameBytes ?? Infinity;
+  if (maximum !== Infinity && (!Number.isSafeInteger(maximum) || maximum < 1))
+    throw new Error("Invalid protocol frame limit");
+  let pendingChunks: Buffer<ArrayBufferLike>[] = [];
+  let pendingLength = 0;
+  for await (const chunk of stream) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+    let frameStart = 0;
+    let newlineIndex = bytes.indexOf(0x0a);
+    while (newlineIndex >= 0) {
+      const tail = bytes.subarray(frameStart, newlineIndex);
+      const frameLength = pendingLength + tail.length;
+      if (frameLength > maximum) throw new Error("Protocol frame exceeds its limit");
+      if (pendingLength === 0) {
+        yield tail;
+      } else {
+        pendingChunks.push(tail);
+        pendingLength = frameLength;
+        yield Buffer.concat(pendingChunks, pendingLength);
+        pendingChunks = [];
+        pendingLength = 0;
+      }
+      frameStart = newlineIndex + 1;
+      newlineIndex = bytes.indexOf(0x0a, frameStart);
+    }
+    if (frameStart < bytes.length) {
+      const remainder = bytes.subarray(frameStart);
+      pendingChunks.push(remainder);
+      pendingLength += remainder.length;
+      if (pendingLength > maximum) throw new Error("Protocol frame exceeds its limit");
+    }
+  }
+  if (pendingLength !== 0) {
+    throw new Error("Protocol stream ended with an unterminated JSONL frame");
+  }
+}
+
+export function parseJsonFrame(frame: Buffer<ArrayBufferLike>): JsonValue {
+  if (frame.length === 0) {
+    throw new Error("Protocol stream contained an empty JSONL frame");
+  }
+  try {
+    return jsonValueSchema.parse(JSON.parse(decoder.decode(frame)));
+  } catch {
+    throw new Error("Protocol stream contained invalid JSONL");
+  }
+}
+
+export function encodeJsonFrame(value: JsonValue): Buffer {
+  return Buffer.from(`${JSON.stringify(jsonValueSchema.parse(value))}\n`, "utf8");
+}
+
+async function writeBytes(stream: Writable, bytes: Buffer<ArrayBufferLike>): Promise<void> {
+  if (stream.write(bytes)) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      stream.off("drain", onDrain);
+      stream.off("error", onError);
+      stream.off("close", onClose);
+    };
+    const onDrain = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = (): void => {
+      cleanup();
+      reject(new Error("Protocol stream closed before pending write drained"));
+    };
+    stream.once("drain", onDrain);
+    stream.once("error", onError);
+    stream.once("close", onClose);
+  });
+}
+
+export function writeJsonFrame(stream: Writable, value: JsonValue): Promise<void> {
+  return writeBytes(stream, encodeJsonFrame(value));
+}
+
+export function writeFrame(stream: Writable, frame: Buffer<ArrayBufferLike>): Promise<void> {
+  return writeBytes(stream, Buffer.concat([frame, newline]));
+}

@@ -1,0 +1,43 @@
+{
+  "plugins": [
+    "packages/adapters/pi",
+    "packages/adapters/claude-code",
+    "packages/adapters/deepseek-harness",
+    "packages/adapters/opencode",
+    "packages/adapters/grok",
+    "packages/adapters/omp",
+    "packages/adapters/antigravity",
+    "packages/adapters/kiro-cli",
+    "packages/adapters/codebuddy",
+    "packages/adapters/workbuddy",
+    "packages/adapters/cursor-cli",
+    "packages/adapters/hermes",
+    "packages/adapters/qoder",
+    "packages/adapters/qoder-cn",
+    "packages/adapters/kimi-code"
+  ],
+  "runtimePackages": [
+    "@agentclientprotocol/sdk",
+    "@anthropic-ai/claude-agent-sdk",
+    "@deepseek-ai/cosmokit",
+    "@deepseek-ai/schemastery",
+    "@hono/node-server",
+    "@modelcontextprotocol/sdk",
+    "@opencode-ai/sdk",
+    "@opencode/client",
+    "@qoder-ai/qoder-agent-sdk",
+    "@qodercn-ai/qodercn-agent-sdk",
+    "ajv",
+    "ajv-formats",
+    "content-type",
+    "diff",
+    "fast-deep-equal",
+    "fast-uri",
+    "hono",
+    "json-schema-traverse",
+    "smol-toml",
+    "ws",
+    "zod",
+    "zod-to-json-schema"
+  ]
+}

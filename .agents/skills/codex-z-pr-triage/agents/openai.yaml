@@ -1,0 +1,4 @@
+interface:
+  display_name: "codex-z incremental Issue / PR triage"
+  short_description: "Manually assess new or changed items and generate a read-only triage dashboard"
+  default_prompt: "Use $codex-z-pr-triage to triage current repository Issues and PRs incrementally, at most 10 per batch. Run prepare-run for new, changed, or incomplete items. Issues identify evidence, information gaps, relations, and next steps. PRs use four recommendations based on value and implementation scope. Fill a real report and unpublished reply drafts. Verify sources with update-report --selection before recording progress and updating the local HTML dashboard. CI/conflicts do not decide PR verdicts. Do not write GitHub."

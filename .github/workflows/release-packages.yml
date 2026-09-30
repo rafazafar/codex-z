@@ -1,0 +1,386 @@
+name: Release packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing annotated tag to release (for example, v0.1.0)"
+        required: true
+        type: string
+      skip_npm:
+        description: "Skip npm publication and publish GitHub installers only"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  prepare:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      npm_tag: ${{ steps.release.outputs.npm_tag }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+      tag_object_sha: ${{ steps.release.outputs.tag_object_sha }}
+      automation_sha: ${{ steps.release.outputs.automation_sha }}
+      ci_run_id: ${{ steps.release.outputs.ci_run_id }}
+      ci_run_attempt: ${{ steps.release.outputs.ci_run_attempt }}
+    steps:
+      # Validation code is from the trusted default branch, not the requested tag.
+      - name: Checkout trusted release automation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: packages/repository-automation
+
+      - name: Validate tag, version, release notes, and exact-commit CI
+        id: release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            if (context.eventName === 'workflow_dispatch' && context.ref !== `refs/heads/${context.payload.repository.default_branch}`) {
+              throw new Error('Manual release must run from the default branch');
+            }
+            const { pathToFileURL } = await import('node:url');
+            const { resolve } = await import('node:path');
+            const { writeFile } = await import('node:fs/promises');
+            const { resolveRelease } = await import(pathToFileURL(resolve('packages/repository-automation/index.mjs')).href);
+            const result = await resolveRelease({
+              github, repo: context.repo, root: process.cwd(),
+              tag: process.env.SOURCE_TAG,
+              expectedRefSha: context.eventName === 'push' ? context.payload.after : undefined,
+              waitForCi: true,
+            });
+            for (const [name, value] of Object.entries({
+              tag: result.tag, version: result.version, prerelease: result.prerelease,
+              npm_tag: result.npmTag, commit_sha: result.sha,
+              tag_object_sha: result.tagObjectSha, automation_sha: result.automationSha,
+              ci_run_id: result.ciRunId, ci_run_attempt: result.ciRunAttempt,
+            })) core.setOutput(name, value);
+            await writeFile('release-notes.md', result.notes);
+            const { notes, ...evidence } = result;
+            await writeFile('release-evidence.json', JSON.stringify(evidence, null, 2) + '\n');
+            await core.summary.addRaw(`Release ${result.tag}\n\nCommit: ${result.sha}\n\nCI: ${result.ciUrl} (attempt ${result.ciRunAttempt})\n`).write();
+
+      - name: Upload release notes and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-notes
+          path: |
+            release-notes.md
+            release-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            runner: macos-14
+            rustTarget: aarch64-apple-darwin
+          - target: macos-x64
+            runner: macos-15-intel
+            rustTarget: x86_64-apple-darwin
+          - target: windows-x64
+            runner: windows-latest
+            rustTarget: x86_64-pc-windows-msvc
+          - target: windows-arm64
+            runner: windows-latest
+            rustTarget: aarch64-pc-windows-msvc
+          - target: linux-x64
+            runner: ubuntu-22.04
+            rustTarget: x86_64-unknown-linux-gnu
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+            rustTarget: aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout immutable release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Setup npm
+        run: npm install --global npm@11.8.0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.rustTarget }}
+
+      - name: Setup Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Install create-dmg
+        if: runner.os == 'macOS'
+        run: brew install create-dmg
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript prerequisites
+        run: npm run build:typescript
+
+      - name: Build installer package
+        if: runner.os != 'Linux'
+        run: npm run release:package -- --target ${{ matrix.target }}
+
+      - name: Build npm package from installer outputs
+        if: runner.os != 'Linux'
+        shell: bash
+        run: >
+          npm run release:npm --
+          --target ${{ matrix.target }}
+          --version ${{ needs.prepare.outputs.version }}
+          --pack
+          --skip-build
+
+      - name: Build and smoke-test Linux npm package
+        if: runner.os == 'Linux'
+        run: >
+          node scripts/release/smoke-npm-package.mjs
+          --target ${{ matrix.target }}
+          --version ${{ needs.prepare.outputs.version }}
+
+      - name: Build npm meta package
+        if: matrix.target == 'macos-arm64'
+        shell: bash
+        run: >
+          npm run release:npm:meta --
+          --version ${{ needs.prepare.outputs.version }}
+          --pack
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codex-z-${{ matrix.target }}
+          path: |
+            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-z-*.dmg
+            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-z-*.exe
+            build/npm/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-z-cli-*-${{ matrix.target }}.tgz
+            build/npm/${{ needs.prepare.outputs.version }}/meta/codex-z-cli-${{ needs.prepare.outputs.version }}.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-npm:
+    name: Publish npm registry packages
+    if: github.event_name != 'workflow_dispatch' || !inputs.skip_npm
+    needs: [prepare, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Checkout immutable release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Checkout pinned verification code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.automation_sha }}
+          path: .release-automation
+          persist-credentials: false
+          sparse-checkout: packages/repository-automation
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+
+      - name: Setup npm
+        run: npm install --global npm@11.8.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript prerequisites
+        run: npm run build:typescript
+
+      - name: Download npm artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: codex-z-*
+          path: build/npm-publish
+          merge-multiple: true
+
+      - name: Revalidate tag and CI immediately before npm publication
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.commit_sha }}
+          TAG_OBJECT_SHA: ${{ needs.prepare.outputs.tag_object_sha }}
+          CI_RUN_ID: ${{ needs.prepare.outputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ needs.prepare.outputs.ci_run_attempt }}
+        with:
+          script: |
+            const { pathToFileURL } = await import('node:url');
+            const { resolve } = await import('node:path');
+            const { verifyRelease } = await import(pathToFileURL(resolve('.release-automation/packages/repository-automation/index.mjs')).href);
+            await verifyRelease({ github, repo: context.repo,
+              tag: process.env.RELEASE_TAG, sha: process.env.RELEASE_SHA,
+              tagObjectSha: process.env.TAG_OBJECT_SHA,
+              ciRunId: process.env.CI_RUN_ID, ciRunAttempt: process.env.CI_RUN_ATTEMPT,
+            });
+
+      - name: Publish platform packages and meta package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: >
+          npm run release:npm:publish --
+          --artifacts build/npm-publish
+          --version "$RELEASE_VERSION"
+          --tag "$NPM_TAG"
+          --provenance
+
+  publish-release:
+    name: Publish GitHub Release
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' && needs.package.result == 'success' &&
+      needs.prepare.outputs.npm_tag != 'test' &&
+      (needs.publish-npm.result == 'success' ||
+      (github.event_name == 'workflow_dispatch' && inputs.skip_npm && needs.publish-npm.result == 'skipped'))
+    needs: [prepare, package, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout immutable release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Checkout pinned verification code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.automation_sha }}
+          path: .release-automation
+          persist-credentials: false
+          sparse-checkout: packages/repository-automation
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: codex-z-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Download release notes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-notes
+          path: release-metadata
+
+      - name: Revalidate tag and CI immediately before GitHub publication
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.commit_sha }}
+          TAG_OBJECT_SHA: ${{ needs.prepare.outputs.tag_object_sha }}
+          CI_RUN_ID: ${{ needs.prepare.outputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ needs.prepare.outputs.ci_run_attempt }}
+        with:
+          script: |
+            const { pathToFileURL } = await import('node:url');
+            const { resolve } = await import('node:path');
+            const { verifyRelease } = await import(pathToFileURL(resolve('.release-automation/packages/repository-automation/index.mjs')).href);
+            await verifyRelease({ github, repo: context.repo,
+              tag: process.env.RELEASE_TAG, sha: process.env.RELEASE_SHA,
+              tagObjectSha: process.env.TAG_OBJECT_SHA,
+              ciRunId: process.env.CI_RUN_ID, ciRunAttempt: process.env.CI_RUN_ATTEMPT,
+            });
+
+      - name: Validate artifacts and publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "codex-z-${VERSION}-macos-arm64.dmg"
+            "codex-z-${VERSION}-macos-x64.dmg"
+            "codex-z-${VERSION}-windows-x64.exe"
+            "codex-z-${VERSION}-windows-arm64.exe"
+          )
+          files=()
+          for name in "${expected[@]}"; do
+            mapfile -d '' matches < <(find release-assets -type f -name "$name" -print0)
+            if [[ "${#matches[@]}" -ne 1 ]]; then
+              echo "expected exactly one release artifact named ${name}, found ${#matches[@]}" >&2
+              exit 1
+            fi
+            if [[ ! -s "${matches[0]}" ]]; then
+              echo "release artifact is empty: ${matches[0]}" >&2
+              exit 1
+            fi
+            files+=("${matches[0]}")
+          done
+          if [[ ! -s release-metadata/release-notes.md ]]; then
+            echo "release notes are missing or empty" >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
+          else
+            flags=(
+              --repo "${{ github.repository }}"
+              --verify-tag
+              --title "codex-z ${VERSION}"
+              --notes-file release-metadata/release-notes.md
+            )
+            if [[ "$PRERELEASE" == "true" ]]; then
+              flags+=(--prerelease)
+            else
+              flags+=(--latest)
+            fi
+            gh release create "$TAG" "${files[@]}" "${flags[@]}"
+          fi

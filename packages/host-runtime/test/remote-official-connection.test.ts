@@ -1,0 +1,231 @@
+import { createServer } from "node:http";
+import { mkdir, rm } from "node:fs/promises";
+import path from "node:path";
+import { PassThrough, type Readable } from "node:stream";
+
+import { describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
+import { readLfFrames } from "@codex-z/protocol-core";
+
+import { createRemoteAppServerWebSocketListener } from "../src/remote-app-server.js";
+import { createRemoteOfficialAppServerConnection } from "../src/remote-official-connection.js";
+
+function testSocketPath(): string {
+  return process.platform === "win32"
+    ? `\\\\.\\pipe\\codex-z-official-${process.pid}-${Date.now()}`
+    : path.join("/tmp", `ch-official-${process.pid}-${Date.now()}`, "control.sock");
+}
+
+async function readFrame(stream: Readable): Promise<string> {
+  stream.setEncoding("utf8");
+  let pending = "";
+  return new Promise((resolve) => {
+    const onData = (chunk: string): void => {
+      pending += chunk;
+      const newline = pending.indexOf("\n");
+      if (newline < 0) return;
+      stream.off("data", onData);
+      resolve(pending.slice(0, newline));
+    };
+    stream.on("data", onData);
+  });
+}
+
+describe("remote official app-server connection", () => {
+  it("preserves history responses larger than 128 MiB and keeps the connection usable", async () => {
+    const server = createServer();
+    const webSockets = new WebSocketServer({ server });
+    const response = Buffer.alloc(128 * 1024 * 1024 + 1, "x");
+    response.write('{"id":1,"result":"');
+    response.write('"}', response.length - 2);
+    webSockets.on("connection", (socket) => {
+      let requests = 0;
+      socket.on("message", (data) => {
+        socket.send(requests++ === 0 ? response : data, { binary: false });
+      });
+    });
+    let connection: Awaited<ReturnType<typeof createRemoteOfficialAppServerConnection>> | undefined;
+    try {
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
+      connection = await createRemoteOfficialAppServerConnection(`ws://127.0.0.1:${address.port}`);
+      const frames = readLfFrames(connection.stdout)[Symbol.asyncIterator]();
+      const closedEarly = connection.closed.then(() => {
+        throw new Error("Official connection closed while reading history");
+      });
+      const history = Promise.race([frames.next(), closedEarly]);
+      connection.stdin.write('{"id":1,"method":"thread/turns/list"}\n');
+      const received = await history;
+      expect(received.done).toBe(false);
+      expect(received.value?.equals(response)).toBe(true);
+
+      const following = Promise.race([frames.next(), closedEarly]);
+      connection.stdin.write('{"id":2,"method":"thread/read"}\n');
+      expect((await following).value?.toString()).toBe('{"id":2,"method":"thread/read"}');
+    } finally {
+      connection?.close();
+      await connection?.closed;
+      for (const socket of webSockets.clients) socket.terminate();
+      await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 20_000);
+
+  it("connects multiple LF-JSON clients to one loopback WebSocket listener", async () => {
+    const server = createServer();
+    const webSockets = new WebSocketServer({ server });
+    webSockets.on("connection", (webSocket) => {
+      webSocket.on("message", (data) => webSocket.send(data, { binary: false }));
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
+      const endpoint = `ws://127.0.0.1:${address.port}`;
+      const first = await createRemoteOfficialAppServerConnection(endpoint);
+      const second = await createRemoteOfficialAppServerConnection(endpoint);
+      const firstFrame = readFrame(first.stdout);
+      const secondFrame = readFrame(second.stdout);
+
+      first.stdin.write('{"id":1,"method":"initialize"}\n');
+      second.stdin.write('{"id":2,"method":"thread/resume"}\n');
+
+      await expect(firstFrame).resolves.toBe('{"id":1,"method":"initialize"}');
+      await expect(secondFrame).resolves.toBe('{"id":2,"method":"thread/resume"}');
+      expect(webSockets.clients.size).toBe(2);
+      first.close();
+      second.close();
+      await Promise.all([first.closed, second.closed]);
+    } finally {
+      for (const webSocket of webSockets.clients) webSocket.terminate();
+      await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("uses a capability header and redacts private transport close details", async () => {
+    const token = "synthetic-private-capability";
+    const server = createServer();
+    const webSockets = new WebSocketServer({ server });
+    let authorization: string | undefined;
+    webSockets.on("connection", (socket, request) => {
+      authorization = request.headers.authorization;
+      socket.on("message", () => socket.close(1008, token));
+    });
+    try {
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing test listener");
+      const connection = await createRemoteOfficialAppServerConnection(
+        `ws://127.0.0.1:${address.port}`,
+        { capabilityToken: token },
+      );
+      let diagnostic = "";
+      connection.stderr.on("data", (chunk: Buffer) => {
+        diagnostic += chunk.toString();
+      });
+      connection.stdin.write('{"id":1,"method":"initialize"}\n');
+      const exit = await connection.closed;
+      expect(authorization).toBe(`Bearer ${token}`);
+      expect(exit.error?.message).toContain("1008");
+      expect(exit.error?.message).not.toContain(token);
+      expect(diagnostic).not.toContain(token);
+    } finally {
+      for (const socket of webSockets.clients) socket.terminate();
+      await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("matches the native client handshake without offering permessage-deflate", async () => {
+    const socketPath = testSocketPath();
+    const server = createServer();
+    const webSockets = new WebSocketServer({ noServer: true });
+    let extensions: string | undefined;
+    server.on("upgrade", (request, socket, head) => {
+      extensions = request.headers["sec-websocket-extensions"];
+      if (extensions) {
+        socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      webSockets.handleUpgrade(request, socket, head, (webSocket) => {
+        webSockets.emit("connection", webSocket, request);
+      });
+    });
+    webSockets.on("connection", (webSocket) => {
+      webSocket.on("message", (data) => webSocket.send(data, { binary: false }));
+    });
+
+    try {
+      if (process.platform !== "win32") await mkdir(path.dirname(socketPath), { recursive: true });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socketPath, resolve);
+      });
+      const connection = await createRemoteOfficialAppServerConnection(socketPath);
+      const frame = readFrame(connection.stdout);
+
+      connection.stdin.write('{"id":1,"method":"initialize"}\n');
+
+      await expect(frame).resolves.toBe('{"id":1,"method":"initialize"}');
+      expect(extensions).toBeUndefined();
+      connection.close();
+      await connection.closed;
+    } finally {
+      for (const webSocket of webSockets.clients) webSocket.terminate();
+      await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (process.platform !== "win32") {
+        await rm(path.dirname(socketPath), { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("performs a WebSocket handshake for two LF-JSON clients against one listener", async () => {
+    const socketPath = testSocketPath();
+    let sessionCount = 0;
+    const listener = createRemoteAppServerWebSocketListener({
+      socketPath,
+      diagnosticOutput: new PassThrough(),
+      createSession: ({ input, output }) => ({
+        async run() {
+          sessionCount += 1;
+          input.pipe(output);
+          await new Promise<void>((resolve) => input.once("close", resolve));
+          return 0;
+        },
+        disconnect: () => input.destroy(),
+        close: () => input.destroy(),
+      }),
+    });
+
+    try {
+      await listener.listen();
+      const first = await createRemoteOfficialAppServerConnection(socketPath);
+      const second = await createRemoteOfficialAppServerConnection(socketPath);
+      const firstFrame = readFrame(first.stdout);
+      const secondFrame = readFrame(second.stdout);
+
+      first.stdin.write('{"id":1,"method":"initialize"}\n');
+      second.stdin.write('{"id":2,"method":"thread/resume"}\n');
+
+      await expect(firstFrame).resolves.toBe('{"id":1,"method":"initialize"}');
+      await expect(secondFrame).resolves.toBe('{"id":2,"method":"thread/resume"}');
+      expect(sessionCount).toBe(2);
+      first.close();
+      second.close();
+      await Promise.all([first.closed, second.closed]);
+    } finally {
+      await listener.close();
+      if (process.platform !== "win32") {
+        await rm(path.dirname(socketPath), { recursive: true, force: true });
+      }
+    }
+  });
+});
