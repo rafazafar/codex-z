@@ -140,6 +140,8 @@ codex-z does it differently:
 
 Read the [contributing guide](CONTRIBUTING.md), [repository rules](AGENTS.md), and [terminology](docs/project/terminology.md). Report bugs and request features through [GitHub issues](https://github.com/rafazafar/codex-z/issues).
 
+To report a bug from Codex Desktop, open the codex-z settings menu and select **Report a bug**. Select **Open bug report on GitHub** to open the report form with the codex-z version filled in. Sign in to GitHub, complete the form, and review it before you submit. Reports are public. The link does not include logs, credentials, or chat content.
+
 ### Architecture
 
 A request passes through Desktop, the shared Host layer, the selected Harness plugin, and its native process. Rust owns native launch, process management, platform integration, and update installation. TypeScript packages own Host routing, Harness adapters, and the Renderer extension.

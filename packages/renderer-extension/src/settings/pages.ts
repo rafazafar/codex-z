@@ -27,6 +27,7 @@ import {
   type RendererImportedThreadOpener,
 } from "./session-import-page.js";
 import { createAppearanceSettingsPage } from "./appearance-page.js";
+import { createReportBugSettingsPage } from "./report-bug-page.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import { createReleaseNotesElement } from "./release-notes.js";
 import { createAccountsSettingsPage, type RendererCodexAccountClient } from "./accounts-page.js";
@@ -77,6 +78,7 @@ export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "session-import",
   "appearance",
   "updates",
+  "report-bug",
   "about",
 ] as const;
 
@@ -648,6 +650,7 @@ export function createDefaultRendererSettingsPages(
     createSessionImportSettingsPage(messages, getSessionImportClient, openImportedThread),
     createAppearanceSettingsPage(messages, getLoadedSessionsClient),
     updatesPage(messages, getUpdateClient),
+    createReportBugSettingsPage(messages),
     aboutPage(messages),
   ]);
 }

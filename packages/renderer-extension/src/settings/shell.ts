@@ -188,7 +188,7 @@ export function mountRendererSettingsShell(
   let otherSectionAdded = false;
   appendNavigationSection(messages.generalSection);
   for (const definition of resolvedRegistry.pages) {
-    if (definition.id === "about" && !otherSectionAdded) {
+    if ((definition.id === "report-bug" || definition.id === "about") && !otherSectionAdded) {
       appendNavigationSection(messages.otherSection);
       otherSectionAdded = true;
     }
