@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { JsonObject } from "@codexhost/protocol-core";
+import type { JsonObject } from "@codex-z/protocol-core";
 
 import {
   closeFixture,
@@ -29,11 +29,15 @@ describe("External Thread first Turn", () => {
     writeRequest(fixture.desktopInput, {
       id: 1,
       method: "thread/start",
-      params: { model: "codexhost/pi-native", cwd: "/synthetic" },
+      params: { model: "codex-z/pi-native", cwd: "/synthetic" },
     });
     const created = await fixture.collector.waitFor((message) => requestId(message, 1));
     const threadId = ((created.result as JsonObject).thread as JsonObject).id as string;
-    await fixture.collector.waitFor((message) => requestId(message, 2));
+    await fixture.collector
+      .waitFor((message) => requestId(message, 2))
+      .catch((e) => {
+        throw new Error(JSON.stringify(fixture.collector.messages) + e);
+      });
     const turnStarted = await fixture.collector.waitFor((message) =>
       method(message, "turn/started"),
     );
