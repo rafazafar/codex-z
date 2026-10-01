@@ -441,6 +441,7 @@ const EXPLICIT_EXTERNAL_THREAD_METHODS = new Set([
   "thread/archive",
   "thread/delete",
   "thread/fork",
+  "thread/inject_items",
   "thread/items/list",
   "thread/metadata/update",
   "thread/name/set",
@@ -1701,6 +1702,28 @@ export class AppServerHost {
         } else {
           await this.#deleteExternalThread(request, location);
         }
+        return;
+      }
+    }
+    if (request.method === "thread/inject_items") {
+      const params = requestObject(request);
+      const location =
+        typeof params.threadId === "string"
+          ? await this.#locateExternalThread(params.threadId)
+          : ({ kind: "official" } as const);
+      if (await this.#writeResolutionError(request, location)) return;
+      if (location.kind === "external") {
+        // Desktop appends raw Responses API items to a Codex Thread's model-visible history before
+        // the first Turn of a new task. An External Harness owns its own history and has no
+        // equivalent, so acknowledge the request: rejecting it makes Desktop abandon the first
+        // message. The items are not forwarded to the Harness.
+        if (!Array.isArray(params.items)) {
+          await this.#writer.json(
+            rpcError(request, -32602, "thread/inject_items items must be an array"),
+          );
+          return;
+        }
+        await this.#writer.json(rpcEnvelope(request, { result: {} }));
         return;
       }
     }

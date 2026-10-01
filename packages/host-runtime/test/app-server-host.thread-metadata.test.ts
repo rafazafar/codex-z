@@ -210,6 +210,38 @@ describe("External Thread metadata updates", () => {
     await stopFixture(fixture);
   });
 
+  it("acknowledges thread/inject_items so Desktop can send a new task's first message", async () => {
+    const fixture = createFixture();
+    const threadId = await startPiThread(fixture);
+    const before = await fixture.mappingStore.getThread(hostThreadIdSchema.parse(threadId));
+
+    writeRequest(fixture.desktopInput, {
+      id: 40,
+      method: "thread/inject_items",
+      params: {
+        threadId,
+        items: [{ type: "message", role: "user", content: [{ type: "input_text", text: "ctx" }] }],
+      },
+    });
+    const accepted = await fixture.collector.waitFor((message) => requestId(message, 40));
+    expect(accepted.error).toBeUndefined();
+    expect(accepted.result).toEqual({});
+
+    writeRequest(fixture.desktopInput, {
+      id: 41,
+      method: "thread/inject_items",
+      params: { threadId, items: "not-an-array" },
+    });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 41)),
+    ).resolves.toMatchObject({ error: { code: -32602 } });
+
+    await expect(
+      fixture.mappingStore.getThread(hostThreadIdSchema.parse(threadId)),
+    ).resolves.toEqual(before);
+    await stopFixture(fixture);
+  });
+
   it("clears External assignments when official Codex deletes the project", async () => {
     const fixture = createFixture();
     answerOfficial(fixture, new Set(["project-a"]));
