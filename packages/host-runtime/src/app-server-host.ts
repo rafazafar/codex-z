@@ -780,10 +780,6 @@ export class AppServerHost {
     if (this.#closeRequested || this.#desktopInputEnded || this.#drainActiveWorkOnInputEnd) return;
     this.#drainActiveWorkOnInputEnd = true;
     this.#externalSteering.close();
-    // Bounded policy: nobody can answer after the transport is gone, so deny
-    // pending approvals and cancel pending questions instead of leaving the
-    // Turn blocked forever. Active Turns otherwise keep running.
-    void this.#rejectInteractionsAfterDisconnect().catch((error: unknown) => this.#diagnose(error));
     const desktopInput = this.#options.desktopInput as Readable & { end?: () => void };
     if (typeof desktopInput.end === "function") desktopInput.end();
     else desktopInput.destroy();
@@ -1027,7 +1023,14 @@ export class AppServerHost {
     this.#pluginLoadAbort.abort();
     await this.#desktopRequests.drain();
     this.#externalSteering.close();
-    if (this.#drainActiveWorkOnInputEnd) await this.#waitForActiveWorkToDrain();
+    if (this.#drainActiveWorkOnInputEnd) {
+      // Bounded policy: nobody can answer after the transport is gone. Run this
+      // only after accepted Desktop frames drained so a buffered response wins.
+      await this.#rejectInteractionsAfterDisconnect().catch((error: unknown) =>
+        this.#diagnose(error),
+      );
+      await this.#waitForActiveWorkToDrain();
+    }
     await this.#closeOfficialRuntime();
   }
 
@@ -4595,6 +4598,17 @@ export class AppServerHost {
         thread.ignoredInteractionIds.delete(interaction.interactionId);
         this.#diagnose(`Unsupported Question cancellation failed: ${cancelled.error.message}`);
       }
+      return;
+    }
+    if (this.#drainActiveWorkOnInputEnd) {
+      // Desktop is gone; an unanswerable Question would block the Turn forever.
+      thread.ignoredInteractionIds.add(interaction.interactionId);
+      const cancelled = await thread.session.execute({
+        type: "interaction.respond",
+        interactionId: interaction.interactionId,
+        response: { type: "question", answers: {}, cancelled: true },
+      });
+      if (!cancelled.ok) thread.ignoredInteractionIds.delete(interaction.interactionId);
       return;
     }
     for (const message of result.messages) await this.#writer.json(message);

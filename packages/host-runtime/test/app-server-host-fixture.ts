@@ -1,4 +1,4 @@
-import { ExternalTurnLeases } from "../src/external-turn-leases.js";
+import type { ExternalTurnLeases } from "../src/external-turn-leases.js";
 import type { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
