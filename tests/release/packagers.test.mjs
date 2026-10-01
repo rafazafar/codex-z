@@ -50,8 +50,8 @@ describe("platform packagers", () => {
     expect(workflow).toContain("npm_tag: result.npmTag");
     expect(workflow).toContain("ref: ${{ needs.prepare.outputs.commit_sha }}");
     expect(workflow).not.toContain("ref: ${{ needs.prepare.outputs.tag }}");
-    expect(workflow).toContain("Revalidate tag and CI immediately before npm publication");
-    expect(workflow).toContain("Revalidate tag and CI immediately before GitHub publication");
+    expect(workflow).toContain("Revalidate tag and commit immediately before npm publication");
+    expect(workflow).toContain("Revalidate tag and commit immediately before GitHub publication");
 
     expect(workflow).toContain("codex-z-*.dmg");
     expect(workflow).toContain("codex-z-*.exe");
@@ -133,7 +133,7 @@ describe("platform packagers", () => {
     expect(publishJob).toContain(
       "if: github.event_name != 'workflow_dispatch' || !inputs.skip_npm",
     );
-    expect(publishJob).toContain("Revalidate tag and CI immediately before npm publication");
+    expect(publishJob).toContain("Revalidate tag and commit immediately before npm publication");
     expect(workflow.slice(releaseStart)).toContain(
       "github.event_name == 'workflow_dispatch' && inputs.skip_npm && needs.publish-npm.result == 'skipped'",
     );
