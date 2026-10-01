@@ -88,7 +88,7 @@ export type DefaultRendererSettingsPageId = (typeof DEFAULT_RENDERER_SETTINGS_PA
 
 export interface RendererUpdateClient {
   checkUpdate(): Promise<UpdateCheckResult | null>;
-  startUpdate(): Promise<UpdateStartResult>;
+  startUpdate(options?: { force?: boolean }): Promise<UpdateStartResult>;
   readUpdateStatus(): Promise<UpdateStatusResult>;
 }
 
@@ -484,15 +484,83 @@ function updatesPage(
         }
       };
 
-      const start = (client: RendererUpdateClient): void => {
+      // Starting an update stops the app, so running work needs an explicit decision.
+      const renderBusyPrompt = (
+        client: RendererUpdateClient,
+        count: number,
+        waiting: boolean,
+      ): void => {
+        panel.dataset.updateState = "busy";
+        delete panel.dataset.inline;
+        panel.replaceChildren(
+          createPanelHead(
+            document,
+            "available",
+            waiting ? messages.updateWaitingForIdle : messages.updateBusy,
+          ),
+        );
+        if (!waiting) {
+          const detail = document.createElement("p");
+          detail.className = "settings-update-summary";
+          detail.textContent = messages.updateBusyDetail.replace("{count}", String(count));
+          panel.append(detail);
+        }
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "settings-command-button settings-command-button--secondary";
+        cancel.textContent = messages.updateCancel;
+        cancel.addEventListener("click", () => {
+          clearPoll();
+          void load();
+        });
+        const buttons: HTMLElement[] = [];
+        if (!waiting) {
+          const stop = document.createElement("button");
+          stop.type = "button";
+          stop.className = "settings-command-button";
+          stop.textContent = messages.updateStopAndRestart;
+          stop.addEventListener("click", () => start(client, { force: true }));
+          const wait = document.createElement("button");
+          wait.type = "button";
+          wait.className = "settings-command-button settings-command-button--secondary";
+          wait.textContent = messages.updateWaitForIdle;
+          wait.addEventListener("click", () => start(client, { waitForIdle: true }));
+          buttons.push(stop, wait);
+        }
+        buttons.push(cancel);
+        panel.append(createPanelActions(document, ...buttons));
+      };
+
+      const start = (
+        client: RendererUpdateClient,
+        mode: { force?: boolean; waitForIdle?: boolean } = {},
+      ): void => {
         if (pending) return;
         pending = true;
-        renderPendingStatus(null, messages.updatePreparing);
+        if (mode.waitForIdle) renderBusyPrompt(client, 0, true);
+        else renderPendingStatus(null, messages.updatePreparing);
         void context.runLatest(
-          (signal) => runBoundedRendererUpdateRequest(() => client.startUpdate(), signal),
+          (signal) =>
+            runBoundedRendererUpdateRequest(
+              () => client.startUpdate(mode.force ? { force: true } : undefined),
+              signal,
+            ),
           {
             success(result) {
               pending = false;
+              if (result.status === null) {
+                // Still busy: ask, or keep waiting and ask the Host again shortly.
+                const count = result.activeWork?.count ?? 1;
+                renderBusyPrompt(client, count, mode.waitForIdle === true);
+                if (mode.waitForIdle) {
+                  clearPoll();
+                  pollTimer = document.defaultView?.setTimeout(
+                    () => start(client, { waitForIdle: true }),
+                    3000,
+                  );
+                }
+                return;
+              }
               renderPendingStatus(
                 result.status,
                 statusMessage(result.status, messages) ?? messages.updatePreparing,

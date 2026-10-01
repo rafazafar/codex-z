@@ -233,6 +233,12 @@ export interface RendererSettingsMessages {
   readonly updateAvailable: string;
   readonly updateWindowsManualRequired: string;
   readonly updateAndRestart: string;
+  readonly updateBusy: string;
+  readonly updateBusyDetail: string;
+  readonly updateStopAndRestart: string;
+  readonly updateWaitForIdle: string;
+  readonly updateWaitingForIdle: string;
+  readonly updateCancel: string;
   readonly updateChecking: string;
   readonly updateDownloading: string;
   readonly updatePreparing: string;
@@ -297,7 +303,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
         "Messages you sent per Session. Delegated, subagent and autonomous Turns are not counted.",
       interruptedRate: "Share of Turns you stopped or redirected before they finished",
       msPerSession: "Time the Model spent working per Session",
-      costPerSession: "Harness cost estimate per Session, where the Harness reports one",
+      costPerSession: "Cost estimate per Session: the Harness's own, or API rates applied to tokens (~)",
       tokensPerSession: "Tokens per Session, as the Harness reports them",
     },
     loading: "Loading usage…",
@@ -311,7 +317,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
       "{turns} Turns · {failed} failed · {cost} total · {tokens} tokens · {perTurn} per Turn",
     recordingSince: "Recording since {date}, on this machine only.",
     notes: [
-      "Cost is each Harness's own estimate and appears only where it reports one. On a subscription it is not what you pay.",
+      "Cost is each Harness's own estimate where it reports one. Codex reports none, so a leading ~ marks a cost estimated from tokens at published API rates. On a subscription it is not what you pay.",
       "Harnesses count tokens differently, for example whether cached input is included, so compare tokens within one Harness.",
       "The first Turn after importing or forking a Session has no cost or tokens, because its share cannot be separated from earlier Turns.",
     ],
@@ -527,6 +533,13 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateWindowsManualRequired:
     "Automatic updates are unavailable on Windows. Update manually below.",
   updateAndRestart: "Update",
+  updateBusy: "Tasks are still running",
+  updateBusyDetail:
+    "{count} running. Updating restarts codex-z and stops them, and anything unfinished is lost.",
+  updateStopAndRestart: "Stop and restart",
+  updateWaitForIdle: "Update when idle",
+  updateWaitingForIdle: "Waiting for running tasks to finish. The update starts when they are done.",
+  updateCancel: "Cancel",
   updateChecking: "Checking for updates...",
   updateDownloading: "Downloading update...",
   updatePreparing: "Preparing update...",
@@ -608,7 +621,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
       turnsPerSession: "每个会话中你发送的消息数。不含委派、Subagent 和自主 Turn。",
       interruptedRate: "在完成前被你停止或调整方向的 Turn 占比",
       msPerSession: "每个会话中 Model 的工作时间",
-      costPerSession: "每个会话的 Harness 费用估算，仅在 Harness 提供时显示",
+      costPerSession: "每个会话的费用估算：Harness 自身上报，或按 API 价格根据 Token 估算（~）",
       tokensPerSession: "每个会话的 Token 数，按 Harness 上报的口径",
     },
     loading: "正在加载用量…",
@@ -620,7 +633,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     rowDetail: "{turns} 轮 · {failed} 轮失败 · 合计 {cost} · {tokens} Token · 每轮 {perTurn}",
     recordingSince: "自 {date} 起记录，仅限本机。",
     notes: [
-      "费用是各 Harness 自身的估算，仅在其上报时显示；订阅套餐下并非实际支付金额。",
+      "费用优先采用各 Harness 自身上报的估算。Codex 不上报费用，带 ~ 前缀的是按公开 API 价格根据 Token 估算的费用；订阅套餐下并非实际支付金额。",
       "各 Harness 统计 Token 的口径不同（例如是否包含缓存输入），请只在同一 Harness 内比较 Token。",
       "导入或派生会话后的第一轮没有费用和 Token，因为无法与此前的 Turn 区分。",
     ],
@@ -823,6 +836,12 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateAvailable: "有新版本可用。",
   updateWindowsManualRequired: "Windows 暂不支持自动更新，请在下方手动更新。",
   updateAndRestart: "更新",
+  updateBusy: "仍有任务正在运行",
+  updateBusyDetail: "正在运行 {count} 个。更新会重启 codex-z 并停止这些任务，未完成的内容将丢失。",
+  updateStopAndRestart: "停止并重启",
+  updateWaitForIdle: "空闲后更新",
+  updateWaitingForIdle: "正在等待运行中的任务结束，结束后将自动开始更新。",
+  updateCancel: "取消",
   updateChecking: "正在检查更新...",
   updateDownloading: "正在下载更新...",
   updatePreparing: "正在准备更新...",

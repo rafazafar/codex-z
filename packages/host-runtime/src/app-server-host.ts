@@ -84,6 +84,7 @@ import {
   permissionModeFixedAtCreate,
   updateCheckResultSchema,
   updateEmptyParamsSchema,
+  updateStartParamsSchema,
   updateStartResultSchema,
   updateStatusResultSchema,
   type AccountCreditsSnapshot,
@@ -2586,12 +2587,29 @@ export class AppServerHost {
     return { record, thread: projected };
   }
 
+  /** Running work a restart would stop, across the official Codex and every external Harness. */
+  #activeWorkCount(): number {
+    let count =
+      this.#activeOfficialTurns.size +
+      this.#pendingOfficialTurnStarts.size +
+      this.#runningSubagentsByParent.size;
+    for (const thread of this.#externalRuntime.values()) {
+      if (thread.running || thread.activeTurnId !== null) count += 1;
+    }
+    if (count === 0 && this.#hasActiveWork()) count = 1;
+    return count;
+  }
+
   async #handleUpdateRequest(request: JsonRpcRequest): Promise<void> {
-    const params = updateEmptyParamsSchema.safeParse(
-      request.params === undefined ? {} : request.params,
-    );
+    const isStart = request.method === "codex-z/update/start";
+    const rawParams = request.params === undefined ? {} : request.params;
+    const params = isStart
+      ? updateStartParamsSchema.safeParse(rawParams)
+      : updateEmptyParamsSchema.safeParse(rawParams);
     if (!params.success) {
-      await this.#writer.json(rpcError(request, -32602, "Update params must be empty"));
+      await this.#writer.json(
+        rpcError(request, -32602, "Update params must be empty or { force?: boolean }"),
+      );
       return;
     }
     const coordinator = this.#options.updateCoordinator;
@@ -2612,6 +2630,17 @@ export class AppServerHost {
       if (request.method === "codex-z/update/status") {
         const result = updateStatusResultSchema.parse(await coordinator.status());
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+      // Starting stops the Desktop right after the download, so ask first when work is running.
+      const force = (params.data as { force?: boolean }).force === true;
+      const activeWork = force ? 0 : this.#activeWorkCount();
+      if (activeWork > 0) {
+        const blocked = updateStartResultSchema.parse({
+          status: null,
+          activeWork: { count: activeWork },
+        });
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(blocked) }));
         return;
       }
       const result = updateStartResultSchema.parse(await coordinator.start());

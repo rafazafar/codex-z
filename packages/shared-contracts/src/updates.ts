@@ -62,8 +62,18 @@ export const updateCheckResultSchema = z.strictObject({
   error: z.string().min(1).max(UPDATE_ERROR_MAX_LENGTH).nullable(),
 });
 
+export const updateStartParamsSchema = z.strictObject({
+  /** Start even though work is running; the restart stops that work. */
+  force: z.boolean().optional(),
+});
+
+/**
+ * `activeWork` is set, and nothing was started, when work is still running and
+ * `force` was not requested. `status` is then null.
+ */
 export const updateStartResultSchema = z.strictObject({
-  status: updateStatusSchema,
+  status: updateStatusSchema.nullable(),
+  activeWork: z.strictObject({ count: z.number().int().positive() }).optional(),
 });
 
 export const updateStatusResultSchema = z.strictObject({
@@ -74,5 +84,6 @@ export type UpdateInstallation = z.infer<typeof updateInstallationSchema>;
 export type UpdatePhase = z.infer<typeof updatePhaseSchema>;
 export type UpdateStatus = z.infer<typeof updateStatusSchema>;
 export type UpdateCheckResult = z.infer<typeof updateCheckResultSchema>;
+export type UpdateStartParams = z.infer<typeof updateStartParamsSchema>;
 export type UpdateStartResult = z.infer<typeof updateStartResultSchema>;
 export type UpdateStatusResult = z.infer<typeof updateStatusResultSchema>;
