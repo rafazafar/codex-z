@@ -26,6 +26,7 @@ describe("Renderer settings foundation", () => {
       "Session Import",
       "General",
       "Updates",
+      "Report a bug",
       "About",
     ]);
     expect(pages.map(({ icon }) => icon)).toEqual([
@@ -34,6 +35,7 @@ describe("Renderer settings foundation", () => {
       "session-import",
       "settings",
       "updates",
+      "ticket",
       "about",
     ]);
     expect(registry.defaultPageId).toBe("connections");
@@ -68,6 +70,7 @@ describe("Renderer settings foundation", () => {
       "session-import",
       "appearance",
       "updates",
+      "report-bug",
       "about",
     ]);
     expect(pages.find(({ id }) => id === "connections")?.mount.toString()).toContain(

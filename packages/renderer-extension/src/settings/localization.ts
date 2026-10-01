@@ -73,6 +73,9 @@ export interface RendererSettingsMessages {
   readonly inDevelopment: string;
   readonly notAvailable: string;
   readonly runtimeCapabilityNotInstalled: string;
+  readonly reportBugDescription: string;
+  readonly reportBugOpen: string;
+  readonly reportBugNotice: string;
   readonly sessionImportHarness: string;
   readonly sessionImportDescription: string;
   readonly sessionImportAvailabilityNote: string;
@@ -306,6 +309,11 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   inDevelopment: "In development",
   notAvailable: "Not available",
   runtimeCapabilityNotInstalled: "This runtime capability is not installed yet.",
+  reportBugDescription:
+    "Open the bug report form on GitHub. Describe the problem and the steps to reproduce it.",
+  reportBugOpen: "Open bug report on GitHub",
+  reportBugNotice:
+    "Sign in to GitHub to submit. Reports are public. Review the details before you submit.",
   sessionImportHarness: "Harness",
   sessionImportDescription:
     "Sessions keep their original project path. If a folder is not in the Codex sidebar, add it as a project first. Original history remains managed by the Harness.",
@@ -505,6 +513,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     accounts: "Accounts",
     "session-import": "Session Import",
     updates: "Updates",
+    "report-bug": "Report a bug",
     about: "About",
   }),
 });
@@ -570,6 +579,9 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   inDevelopment: "开发中",
   notAvailable: "暂不可用",
   runtimeCapabilityNotInstalled: "运行时尚未安装该项能力，因此暂不可用。",
+  reportBugDescription: "在 GitHub 打开问题报告表单，描述问题和复现步骤。",
+  reportBugOpen: "在 GitHub 报告问题",
+  reportBugNotice: "登录 GitHub 后提交。报告将公开，请在提交前检查内容。",
   sessionImportHarness: "Harness",
   sessionImportDescription:
     "会话将保留原始项目路径；若该文件夹尚未出现在 Codex 侧栏，请先将其添加为项目。原始历史仍由 Harness 管理。",
@@ -758,6 +770,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     accounts: "账号",
     "session-import": "会话导入",
     updates: "更新",
+    "report-bug": "报告问题",
     about: "关于",
   }),
 });
