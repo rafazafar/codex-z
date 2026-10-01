@@ -6,10 +6,11 @@
  */
 export class ExternalTurnLeases {
   readonly #holders = new Map<string, unknown>();
-  readonly #listeners = new Set<(threadId: string) => void>();
+  readonly #listeners = new Set<(threadId: string, owner: unknown) => void>();
+  readonly #versions = new Map<string, number>();
 
   /** Notified after a lease is released. Returns an unsubscribe function. */
-  subscribe(listener: (threadId: string) => void): () => void {
+  subscribe(listener: (threadId: string, owner: unknown) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
@@ -18,6 +19,9 @@ export class ExternalTurnLeases {
   acquire(threadId: string, owner: unknown): boolean {
     const holder = this.#holders.get(threadId);
     if (holder !== undefined && holder !== owner) return false;
+    if (holder === undefined) {
+      this.#versions.set(threadId, this.version(threadId) + 1);
+    }
     this.#holders.set(threadId, owner);
     return true;
   }
@@ -25,7 +29,12 @@ export class ExternalTurnLeases {
   release(threadId: string, owner: unknown): void {
     if (this.#holders.get(threadId) !== owner) return;
     this.#holders.delete(threadId);
-    for (const listener of [...this.#listeners]) listener(threadId);
+    for (const listener of [...this.#listeners]) listener(threadId, owner);
+  }
+
+  /** Changes whenever a new writer acquires the Thread. */
+  version(threadId: string): number {
+    return this.#versions.get(threadId) ?? 0;
   }
 
   heldByOther(threadId: string, owner: unknown): boolean {

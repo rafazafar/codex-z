@@ -202,6 +202,8 @@ export class ExternalThreadRuntime {
   readonly #repository: ExternalThreadRepository;
   readonly #restores = new Map<string, Promise<ExternalThread>>();
   readonly #subagentRunning: (threadId: string) => boolean;
+  readonly #leaseVersion: (threadId: string) => number;
+  readonly #acquireRestoreLease: (threadId: string) => (() => void) | undefined;
   readonly #externallyActive: (threadId: string) => boolean;
   readonly #threads = new Map<string, ExternalThread>();
 
@@ -214,6 +216,8 @@ export class ExternalThreadRuntime {
     subagentRunning?(threadId: string): boolean;
     /** True when another Host session still runs a Turn on this Thread. */
     externallyActive?(threadId: string): boolean;
+    leaseVersion?(threadId: string): number;
+    acquireRestoreLease?(threadId: string): (() => void) | undefined;
     idleRelease?: {
       queue: DesktopRequestQueue;
       canRelease(thread: ExternalThread): boolean;
@@ -227,6 +231,8 @@ export class ExternalThreadRuntime {
     this.#diagnose = input.diagnose;
     this.#subagentRunning = input.subagentRunning ?? (() => false);
     this.#externallyActive = input.externallyActive ?? (() => false);
+    this.#leaseVersion = input.leaseVersion ?? (() => 0);
+    this.#acquireRestoreLease = input.acquireRestoreLease ?? (() => () => undefined);
     this.idleRelease = new ExternalThreadIdleRelease({
       threads: () => this.values(),
       get: (id) => this.get(id),
@@ -266,6 +272,7 @@ export class ExternalThreadRuntime {
     requestedPermissionModeId?: HarnessPermissionModeId;
     transportModelId?: string;
     restoredState?: HarnessSessionState;
+    restoredWhileLeased?: boolean;
   }): ExternalThread {
     const harnessId = input.record.harnessId as ExternalHarnessId;
     if (!this.#adapters.has(harnessId)) {
@@ -311,7 +318,8 @@ export class ExternalThreadRuntime {
       turns: input.turns,
       historyHydrated: true,
       running,
-      restoredWhileLeased: this.#externallyActive(input.record.hostThreadId),
+      restoredWhileLeased:
+        input.restoredWhileLeased ?? this.#externallyActive(input.record.hostThreadId),
       activeTurnId: null,
       latestUsage: input.session.initialUsage,
       usageTurnId: null,
@@ -465,7 +473,7 @@ export class ExternalThreadRuntime {
         record: aligned.record,
         turns: aligned.turns,
         sessionId: thread.sessionId,
-        running: thread.running,
+        running: thread.running || this.#externallyActive(thread.id),
       });
       return null;
     } catch {
@@ -557,6 +565,26 @@ export class ExternalThreadRuntime {
         ...(snapshot.value.state ? { restoredState: snapshot.value.state } : {}),
       });
     }
+    const releaseLease = this.#acquireRestoreLease(record.hostThreadId);
+    try {
+      return await this.#restoreNative(
+        record,
+        adapter,
+        this.#externallyActive(record.hostThreadId),
+        this.#leaseVersion(record.hostThreadId),
+      );
+    } finally {
+      releaseLease?.();
+    }
+  }
+
+  async #restoreNative(
+    record: StoredThreadRecordV1,
+    adapter: HarnessAdapter,
+    externallyActive: boolean,
+    leaseVersion: number,
+  ): Promise<ExternalThread> {
+    const harnessId = record.harnessId as ExternalHarnessId;
     const restoredSelection = decodeExternalTransportSelection(harnessId, record.transportModelId);
     const opened = await adapter.open({
       kind: "resume",
@@ -564,11 +592,11 @@ export class ExternalThreadRuntime {
       environment: { ...this.#environment, [DELEGATION_THREAD_ID_ENV]: record.hostThreadId },
       nativeRef: record.nativeSessionRef as NativeSessionRef,
       knownTurnRefs: record.turnMappings.map(({ nativeTurnRef }) => nativeTurnRef),
-      ...(restoredSelection?.model ? { model: restoredSelection.model } : {}),
-      ...(restoredSelection?.thinkingOptionId
+      ...(!externallyActive && restoredSelection?.model ? { model: restoredSelection.model } : {}),
+      ...(!externallyActive && restoredSelection?.thinkingOptionId
         ? { thinkingOptionId: restoredSelection.thinkingOptionId }
         : {}),
-      ...(harnessId === "grok" && restoredSelection?.permissionModeId
+      ...(!externallyActive && harnessId === "grok" && restoredSelection?.permissionModeId
         ? { permissionModeId: restoredSelection.permissionModeId }
         : {}),
     });
@@ -578,6 +606,7 @@ export class ExternalThreadRuntime {
     const session = opened.value;
     try {
       if (
+        !externallyActive &&
         restoredSelection?.permissionModeId &&
         harnessId !== "opencode" &&
         !permissionModeFixedAtCreate(session.capabilities.configuration)
@@ -617,7 +646,11 @@ export class ExternalThreadRuntime {
       // OMP can silently replace an unavailable Model during resume, while OpenCode's
       // additive Permission API cannot reliably restore a stale mode. Persist live state so the
       // next restore does not reapply an obsolete transport token.
-      if ((harnessId === "omp" || harnessId === "opencode") && effectiveModel) {
+      if (
+        !externallyActive &&
+        (harnessId === "omp" || harnessId === "opencode") &&
+        effectiveModel
+      ) {
         const liveSelection: ExternalConfigurationSelection = {
           model: effectiveModel,
           ...(effectiveThinkingOptionId ? { thinkingOptionId: effectiveThinkingOptionId } : {}),
@@ -660,6 +693,8 @@ export class ExternalThreadRuntime {
           : {}),
         ...(restoredState ? { restoredState } : {}),
         transportModelId,
+        restoredWhileLeased:
+          externallyActive || leaseVersion !== this.#leaseVersion(record.hostThreadId),
       });
     } catch (error) {
       await session.close().catch(() => undefined);

@@ -595,6 +595,7 @@ export class AppServerHost {
   readonly #desktopRequests = new DesktopRequestQueue();
   #drainActiveWorkOnInputEnd = false;
   readonly #turnLeases: ExternalTurnLeases;
+  readonly #leaseOperations = new Map<string, number>();
   readonly #unsubscribeTurnLeases: () => void;
   #desktopInputEnded = false;
 
@@ -690,9 +691,10 @@ export class AppServerHost {
       }
     }
     this.#turnLeases = options.externalTurnLeases ?? new ExternalTurnLeases();
-    this.#unsubscribeTurnLeases = this.#turnLeases.subscribe((threadId) => {
+    this.#unsubscribeTurnLeases = this.#turnLeases.subscribe((threadId, owner) => {
       const thread = this.#externalRuntime.get(threadId);
-      if (!thread?.restoredWhileLeased || thread.running || this.#closeRequested) return;
+      if (owner === this || !thread || thread.running || this.#closeRequested) return;
+      thread.restoredWhileLeased = true;
       void this.#setThreadStatus(thread, { type: "idle" }).catch((error: unknown) =>
         this.#diagnose(error),
       );
@@ -704,6 +706,8 @@ export class AppServerHost {
       consumeOutputs: (thread) => this.#consumeHarnessOutputs(thread),
       diagnose: (error) => this.#diagnose(error),
       externallyActive: (threadId) => this.#turnLeases.heldByOther(threadId, this),
+      leaseVersion: (threadId) => this.#turnLeases.version(threadId),
+      acquireRestoreLease: (threadId) => this.#acquireOperationLease(threadId),
       subagentRunning: (threadId) => this.#subagentThreadStatuses.get(threadId) === "active",
       idleRelease: {
         queue: this.#desktopRequests,
@@ -807,8 +811,57 @@ export class AppServerHost {
     return this.#turnLeases.acquire(thread.id, this);
   }
 
+  #acquireOperationLease(threadId: string): (() => void) | undefined {
+    if (!this.#turnLeases.acquire(threadId, this)) return undefined;
+    this.#leaseOperations.set(threadId, (this.#leaseOperations.get(threadId) ?? 0) + 1);
+    return () => {
+      const remaining = (this.#leaseOperations.get(threadId) ?? 1) - 1;
+      if (remaining > 0) this.#leaseOperations.set(threadId, remaining);
+      else this.#leaseOperations.delete(threadId);
+      this.#syncTurnLeases();
+    };
+  }
+
+  async #withExternalMutationLease(
+    request: JsonRpcRequest,
+    threadId: string | undefined,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    if (
+      !threadId ||
+      ![
+        "codex-z/thread/model/select",
+        "codex-z/thread/thinking/select",
+        "codex-z/thread/permission-mode/select",
+        "thread/rollback",
+        "thread/revert",
+        "turn/start",
+        "turn/steer",
+        "codex-z/thread/command/execute",
+      ].includes(request.method) ||
+      (await this.#locateExternalThread(threadId)).kind !== "external"
+    ) {
+      await run();
+      return;
+    }
+    const releaseLease = this.#acquireOperationLease(threadId);
+    if (!releaseLease) {
+      await this.#writer.json(
+        rpcError(request, -32072, "External Thread already has an active Turn"),
+      );
+      return;
+    }
+    try {
+      // Hold ownership through recovery, native confirmation, and persistence.
+      await run();
+    } finally {
+      releaseLease();
+    }
+  }
+
   #syncTurnLeases(): void {
     for (const id of this.#turnLeases.heldBy(this)) {
+      if (this.#leaseOperations.has(id)) continue;
       const thread = this.#externalRuntime.get(id);
       if (!thread || (!thread.running && thread.activeTurnId === null)) {
         this.#turnLeases.release(id, this);
@@ -900,6 +953,7 @@ export class AppServerHost {
       await this.#closeOfficialRuntime();
       return this.#closeRequested ? 0 : 1;
     } finally {
+      this.#unsubscribeTurnLeases();
       this.#pluginLoadAbort.abort();
       // Stop replacement waiters before waiting for their tracked Host operations.
       this.#externalSteering.close();
@@ -1021,7 +1075,9 @@ export class AppServerHost {
       this.#dispatchDesktopRequest(() =>
         this.#desktopRequests.run(threadId, () =>
           this.#externalRuntime.idleRelease.runOperation(threadId, () =>
-            this.#handleDesktopRequest(request, frame),
+            this.#withExternalMutationLease(request, threadId, () =>
+              this.#handleDesktopRequest(request, frame),
+            ),
           ),
         ),
       );
@@ -2993,12 +3049,6 @@ export class AppServerHost {
       );
       return;
     }
-    if (this.#turnLeases.heldByOther(thread.id, this)) {
-      await this.#writer.json(
-        rpcError(request, -32072, "External Thread already has an active Turn"),
-      );
-      return;
-    }
     if (!thread.session.capabilities.configuration.selectModel) {
       await this.#writer.json(
         rpcError(request, -32078, "External Harness does not support Model selection"),
@@ -3057,12 +3107,6 @@ export class AppServerHost {
     if (!thread) {
       await this.#writer.json(
         rpcError(request, -32078, "Thinking selection requires a current-process external Thread"),
-      );
-      return;
-    }
-    if (this.#turnLeases.heldByOther(thread.id, this)) {
-      await this.#writer.json(
-        rpcError(request, -32072, "External Thread already has an active Turn"),
       );
       return;
     }
@@ -3158,12 +3202,6 @@ export class AppServerHost {
           -32078,
           "Permission Mode selection requires a current-process external Thread",
         ),
-      );
-      return;
-    }
-    if (this.#turnLeases.heldByOther(thread.id, this)) {
-      await this.#writer.json(
-        rpcError(request, -32072, "External Thread already has an active Turn"),
       );
       return;
     }
@@ -3407,22 +3445,21 @@ export class AppServerHost {
     const location = await this.#locateExternalThread(threadId);
     if (location.kind !== "external") return location;
     await this.#waitForPlugins();
-    const resolution = await this.#externalRuntime.resolve(threadId);
-    if (
-      resolution.kind !== "external" ||
-      !resolution.thread.restoredWhileLeased ||
-      this.#turnLeases.heldByOther(threadId, this)
+    let resolution = await this.#externalRuntime.resolve(threadId);
+    while (
+      resolution.kind === "external" &&
+      resolution.thread.restoredWhileLeased &&
+      !this.#turnLeases.heldByOther(threadId, this)
     ) {
-      return resolution;
+      // Recovery overlapped another writer. Reopen before using native history.
+      const stale = resolution.thread;
+      if (stale.running || stale.activeTurnId) return resolution;
+      await stale.session.close().catch((error: unknown) => this.#diagnose(error));
+      await stale.outputTask.catch(() => undefined);
+      this.#externalRuntime.remove(threadId);
+      resolution = await this.#externalRuntime.resolve(threadId);
     }
-    // The Turn that held this native session finished after we restored it, so
-    // our Harness handle predates it. Reopen instead of writing from stale history.
-    const stale = resolution.thread;
-    if (stale.running || stale.activeTurnId) return resolution;
-    await stale.session.close().catch((error: unknown) => this.#diagnose(error));
-    await stale.outputTask.catch(() => undefined);
-    this.#externalRuntime.remove(threadId);
-    return this.#externalRuntime.resolve(threadId);
+    return resolution;
   }
 
   async #writeResolutionError(
@@ -3816,10 +3853,9 @@ export class AppServerHost {
     text: string,
     requestedTurnId: string,
   ): Promise<void> {
-    if (this.#externalThreadBusy(thread)) {
+    if (this.#externalThreadBusy(thread) || !this.#claimTurnLease(thread)) {
       throw new Error("External Thread already has an active Turn");
     }
-    this.#claimTurnLease(thread);
     const turnId = hostTurnIdSchema.parse(requestedTurnId);
     const projection: ProjectedTurn = {
       projector: new CodexTurnProjector({
@@ -3838,18 +3874,20 @@ export class AppServerHost {
       promise: Promise.resolve(),
       resolve: () => undefined,
     });
-    const result = await thread.session.execute({
-      type: "turn.start",
-      turnId,
-      input: [{ type: "text", text }],
-    });
-    if (!result.ok) {
+    try {
+      const result = await thread.session.execute({
+        type: "turn.start",
+        turnId,
+        input: [{ type: "text", text }],
+      });
+      if (!result.ok) throw new Error(result.error.message);
+    } catch (error) {
       thread.running = false;
       thread.activeTurnId = null;
       thread.projectedTurns.delete(turnId);
       thread.responseGates.delete(turnId);
       this.#signalActiveWorkChanged();
-      throw new Error(result.error.message);
+      throw error;
     }
   }
 

@@ -32,6 +32,14 @@ codex-z remote status
 2. Open the SSH workspace.
 3. Pick a Harness from the composer's Agent / Model selector.
 
+## Reconnect during an active Turn
+
+A transport disconnect lets the active external Turn finish. The Host processes accepted input first. It then denies pending Approvals and cancels pending Questions. It also denies or cancels new interactions while the disconnected connection drains.
+
+Connections in the same remote Host share a Thread lease. A second connection can read the Thread and sees it as active. It cannot start another Turn, change Model, Thinking, or Permission Mode, or roll back history while the first connection owns the lease. Configuration and history changes hold the lease until the operation finishes.
+
+Recovery defers saved configuration while another connection owns the lease. After that lease is released, the second connection reports idle. Before its next Desktop operation, it closes the old Session handle and opens a new one to read the completed native history. This also applies when the first Turn finishes during recovery.
+
 ## Commands
 
 ```bash
