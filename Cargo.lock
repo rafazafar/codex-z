@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "codex-z-gate-a-native"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "codex-z-platform",
  "codex-z-shim",
@@ -92,7 +92,7 @@ dependencies = [
 
 [[package]]
 name = "codex-z-launcher"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "codex-z-platform",
  "fs2",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "codex-z-platform"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "libproc",
  "nix",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "codex-z-shim"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "codex-z-platform",
  "fs2",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "codex-z-updater"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "codex-z-platform",
  "serde",
