@@ -3259,6 +3259,7 @@ export class AppServerHost {
       return;
     }
     const session = sessionResult.value;
+    let releaseStartGate: () => void = () => undefined;
     await this.#externalRuntime.idleRelease.runOperation(record.hostThreadId, async () => {
       try {
         if (session.initialState.nativeRef) {
@@ -3283,6 +3284,9 @@ export class AppServerHost {
           ...(requestedPermissionModeId ? { requestedPermissionModeId } : {}),
         });
         this.#routeObservationTracker.bindCreatedThread(request.id, externalThread.id);
+        // Desktop may send the first turn/start as soon as it reads the response. Hold Thread-scoped
+        // requests until thread/started is written so no Turn event precedes Thread registration.
+        releaseStartGate = this.#holdThreadRequests(record.hostThreadId);
         await this.#writer.json(
           rpcEnvelope(request, {
             result: {
@@ -3310,7 +3314,9 @@ export class AppServerHost {
           emittedAtMs: Date.now(),
           params: { thread },
         });
+        releaseStartGate();
       } catch {
+        releaseStartGate();
         this.#externalRuntime.remove(record.hostThreadId);
         this.#routeObservationTracker.forgetThread(record.hostThreadId);
         await session.close().catch(() => undefined);
@@ -3320,6 +3326,16 @@ export class AppServerHost {
         );
       }
     });
+  }
+
+  /** Queues later requests for a Thread until the returned release function is called. */
+  #holdThreadRequests(threadId: string): () => void {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    void this.#desktopRequests.run(threadId, () => held);
+    return release;
   }
 
   #registerExternalThread(input: {
