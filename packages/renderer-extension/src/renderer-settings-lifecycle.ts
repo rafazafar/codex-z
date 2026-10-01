@@ -1,4 +1,5 @@
 import type { LoadedSessionsClient } from "./settings/loaded-sessions-table.js";
+import type { UsageLedgerClient } from "./settings/usage-page.js";
 import { readCodexLocaleSettings, type CodexLocaleSettings } from "./codex-locale-adapter.js";
 import {
   rendererSettingsMessages,
@@ -30,6 +31,7 @@ export interface RendererSettingsLifecycleOptions {
   getAccountClient?(): RendererCodexAccountClient | null;
   getSessionImportClient?(): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
+  getUsageLedgerClient?(): UsageLedgerClient | null;
   openImportedThread?: RendererImportedThreadOpener;
   onLocaleChange?(locale: RendererSettingsLocale): void;
 }
@@ -77,6 +79,7 @@ export function installRendererSettingsLifecycle(
         if (!disposed && !signal.aborted) shell?.close();
       },
       options.getLoadedSessionsClient ?? (() => null),
+      options.getUsageLedgerClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);
     const nextTrigger = installRendererSettingsRailTrigger({

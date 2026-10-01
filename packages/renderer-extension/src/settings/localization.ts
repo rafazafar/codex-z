@@ -4,6 +4,8 @@ import {
   type CredentialImportMessages,
 } from "./credential-import-messages.js";
 import type { DefaultRendererSettingsPageId } from "./pages.js";
+import type { UsageLedgerColumn } from "./usage-ledger-metrics.js";
+import type { UsageLedgerRange } from "./usage-page.js";
 
 export const RENDERER_SETTINGS_LOCALES = ["en", "zh-CN"] as const;
 export type RendererSettingsLocale = (typeof RENDERER_SETTINGS_LOCALES)[number];
@@ -33,6 +35,22 @@ export interface RendererSettingsMessages {
   readonly otherSection: string;
   readonly appearanceDescription: string;
   readonly appearanceGroup: string;
+  readonly usage: {
+    description: string;
+    rangeLabel: string;
+    ranges: Record<UsageLedgerRange, string>;
+    columns: Record<UsageLedgerColumn, string>;
+    columnHelp: Record<UsageLedgerColumn, string>;
+    loading: string;
+    empty: string;
+    emptyRange: string;
+    failed: string;
+    unavailable: string;
+    unknownModel: string;
+    rowDetail: string;
+    recordingSince: string;
+    notes: readonly string[];
+  };
   readonly loadedSessions: {
     title: string;
     description: string;
@@ -258,6 +276,46 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   otherSection: "Other",
   appearanceDescription: "Conversation display and local resource management.",
   appearanceGroup: "Appearance",
+  usage: {
+    description:
+      "Compare Models on the work you actually did: how many Turns each needed, how often you stopped it, and what a Session cost in time, money and tokens.",
+    rangeLabel: "Time range",
+    ranges: { "7d": "7 days", "30d": "30 days", all: "All time" },
+    columns: {
+      model: "Model",
+      sessions: "Sessions",
+      turnsPerSession: "Turns / session",
+      interruptedRate: "Stopped",
+      msPerSession: "Time / session",
+      costPerSession: "Cost / session",
+      tokensPerSession: "Tokens / session",
+    },
+    columnHelp: {
+      model: "Model and the Harness it ran in",
+      sessions: "Threads with at least one completed Turn on this Model",
+      turnsPerSession:
+        "Messages you sent per Session. Delegated, subagent and autonomous Turns are not counted.",
+      interruptedRate: "Share of Turns you stopped or redirected before they finished",
+      msPerSession: "Time the Model spent working per Session",
+      costPerSession: "Harness cost estimate per Session, where the Harness reports one",
+      tokensPerSession: "Tokens per Session, as the Harness reports them",
+    },
+    loading: "Loading usage…",
+    empty:
+      "No Turns recorded yet. Recording starts with this version, so earlier Sessions are not included.",
+    emptyRange: "No Turns in this time range.",
+    failed: "Could not load usage.",
+    unavailable: "Local Host does not support usage history or is unavailable.",
+    unknownModel: "Unknown Model",
+    rowDetail:
+      "{turns} Turns · {failed} failed · {cost} total · {tokens} tokens · {perTurn} per Turn",
+    recordingSince: "Recording since {date}, on this machine only.",
+    notes: [
+      "Cost is each Harness's own estimate and appears only where it reports one. On a subscription it is not what you pay.",
+      "Harnesses count tokens differently, for example whether cached input is included, so compare tokens within one Harness.",
+      "The first Turn after importing or forking a Session has no cost or tokens, because its share cannot be separated from earlier Turns.",
+    ],
+  },
   loadedSessions: {
     title: "Loaded sessions",
     description:
@@ -511,6 +569,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     connections: "Connections",
     appearance: "General",
     accounts: "Accounts",
+    usage: "Usage",
     "session-import": "Session Import",
     updates: "Updates",
     "report-bug": "Report a bug",
@@ -529,6 +588,43 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   otherSection: "其他",
   appearanceDescription: "会话显示与本地资源管理。",
   appearanceGroup: "外观",
+  usage: {
+    description:
+      "基于实际工作比较各 Model：每个会话需要多少轮、被你中断的比例，以及每个会话花费的时间、费用和 Token。",
+    rangeLabel: "时间范围",
+    ranges: { "7d": "7 天", "30d": "30 天", all: "全部" },
+    columns: {
+      model: "Model",
+      sessions: "会话",
+      turnsPerSession: "轮数 / 会话",
+      interruptedRate: "中断",
+      msPerSession: "时间 / 会话",
+      costPerSession: "费用 / 会话",
+      tokensPerSession: "Token / 会话",
+    },
+    columnHelp: {
+      model: "Model 及其所在的 Harness",
+      sessions: "在该 Model 上至少完成一轮的 Thread 数",
+      turnsPerSession: "每个会话中你发送的消息数。不含委派、Subagent 和自主 Turn。",
+      interruptedRate: "在完成前被你停止或调整方向的 Turn 占比",
+      msPerSession: "每个会话中 Model 的工作时间",
+      costPerSession: "每个会话的 Harness 费用估算，仅在 Harness 提供时显示",
+      tokensPerSession: "每个会话的 Token 数，按 Harness 上报的口径",
+    },
+    loading: "正在加载用量…",
+    empty: "尚无 Turn 记录。记录从此版本开始，不包含更早的会话。",
+    emptyRange: "该时间范围内没有 Turn。",
+    failed: "无法加载用量。",
+    unavailable: "本地 Host 不支持用量历史或当前不可用。",
+    unknownModel: "未知 Model",
+    rowDetail: "{turns} 轮 · {failed} 轮失败 · 合计 {cost} · {tokens} Token · 每轮 {perTurn}",
+    recordingSince: "自 {date} 起记录，仅限本机。",
+    notes: [
+      "费用是各 Harness 自身的估算，仅在其上报时显示；订阅套餐下并非实际支付金额。",
+      "各 Harness 统计 Token 的口径不同（例如是否包含缓存输入），请只在同一 Harness 内比较 Token。",
+      "导入或派生会话后的第一轮没有费用和 Token，因为无法与此前的 Turn 区分。",
+    ],
+  },
   loadedSessions: {
     title: "已加载会话",
     description:
@@ -768,6 +864,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     connections: "连接",
     appearance: "通用",
     accounts: "账号",
+    usage: "用量",
     "session-import": "会话导入",
     updates: "更新",
     "report-bug": "报告问题",

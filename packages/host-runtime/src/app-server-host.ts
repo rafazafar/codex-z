@@ -3,7 +3,9 @@ import {
   IDLE_RELEASE_SETTINGS_METHOD,
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
+  USAGE_LEDGER_SUMMARY_METHOD,
   idleReleaseSettingsSchema,
+  usageLedgerSummaryParamsSchema,
 } from "@codex-z/shared-contracts";
 import {
   CREDENTIAL_IMPORTS_METHOD,
@@ -142,6 +144,8 @@ import {
   harnessLaunchSettingsSetSchema,
 } from "@codex-z/shared-contracts";
 import { DesktopRequestQueue } from "./desktop-request-queue.js";
+import { UsageLedgerStore, defaultUsageLedgerFile } from "./usage-ledger.js";
+import { UsageLedgerRecorder } from "./usage-ledger-recorder.js";
 import type {
   DelegationControlRegistration,
   DelegationStartInput,
@@ -567,6 +571,7 @@ export class AppServerHost {
   readonly #externalSteering = new ExternalTurnSteering();
   readonly #liveCommandCache = new LiveCommandCatalogCache();
   #repository: ExternalThreadRepository;
+  #usageLedger: UsageLedgerRecorder;
   #pendingDesktopApprovals = new Map<HostApprovalRequestId, PendingDesktopApproval>();
   #pendingDesktopQuestions = new Map<HostQuestionRequestId, PendingDesktopQuestion>();
   #nextApprovalRequestId = HOST_APPROVAL_REQUEST_ID_MAX;
@@ -684,6 +689,20 @@ export class AppServerHost {
       options.mappingStore ??
         createProductionExternalThreadStore(this.#options.environment ?? process.env),
     );
+    this.#usageLedger = new UsageLedgerRecorder({
+      store: new UsageLedgerStore(defaultUsageLedgerFile(environment)),
+      harnessName: (harnessId) =>
+        harnessId === "codex"
+          ? "Codex"
+          : (this.#pluginDescriptors.find(({ id }) => id === harnessId)?.name ?? harnessId),
+      isAgentThread: async (threadId) => {
+        const parsed = hostThreadIdSchema.safeParse(threadId);
+        return (
+          parsed.success && (await this.#repository.getDelegationByChild(parsed.data)) !== null
+        );
+      },
+      diagnose: () => this.#diagnose("Usage ledger could not be updated"),
+    });
     this.#externalAdapters = new Map(options.externalAdapters);
     for (const [harnessId, adapter] of this.#externalAdapters) {
       if (adapter.harnessId !== harnessId) {
@@ -1108,6 +1127,22 @@ export class AppServerHost {
       await this.#writer.json(
         rpcEnvelope(request, { result: this.#externalRuntime.idleRelease.list() }),
       );
+      return;
+    }
+    if (request.method === USAGE_LEDGER_SUMMARY_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        const parsed = usageLedgerSummaryParamsSchema.safeParse(request.params ?? {});
+        if (!parsed.success) {
+          await this.#writer.json(rpcError(request, -32602, "Invalid usage ledger params"));
+          return;
+        }
+        try {
+          const summary = await this.#usageLedger.summary(parsed.data);
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(summary) }));
+        } catch {
+          await this.#writer.json(rpcError(request, -32076, "Usage ledger could not be read"));
+        }
+      });
       return;
     }
     if (request.method === IDLE_RELEASE_SETTINGS_METHOD) {
@@ -1727,6 +1762,7 @@ export class AppServerHost {
     request: JsonRpcRequest,
     frame: Buffer<ArrayBufferLike>,
   ): Promise<void> {
+    this.#usageLedger.officialRequest(request);
     try {
       await this.#officialRuntime.sendFrame(frame);
     } catch {
@@ -1775,6 +1811,7 @@ export class AppServerHost {
         // Ignore an invalid native observation while preserving the official frame.
       }
     }
+    this.#usageLedger.officialOutput(parsed);
     const rateLimits = observeCodexRateLimits(parsed);
     if (rateLimits) this.#officialRateLimits.observe(input.accountId, rateLimits);
     // Owner already rejects retired generations.
@@ -4227,6 +4264,7 @@ export class AppServerHost {
           : null
         : (thread.activeTurnId ?? this.#latestCompletedTurnId(thread));
       thread.usageTurnId = turnId;
+      this.#usageLedger.externalUsageChanged({ threadId: thread.id, turnId, usage: event.usage });
       if (turnId) {
         await this.#waitForTurnResponse(thread, turnId);
         await this.#writeExternalUsage(thread, turnId);
@@ -4295,6 +4333,7 @@ export class AppServerHost {
         promise: Promise.resolve(),
         resolve: () => undefined,
       });
+      this.#recordExternalTurnStart(thread, event.turnId, true);
       return;
     }
 
@@ -4332,6 +4371,7 @@ export class AppServerHost {
     }
     const result = projection.projector.project(event as ProjectableHostEvent);
     if (event.type === "turn.started") {
+      this.#recordExternalTurnStart(thread, event.turnId, false);
       await this.#setThreadStatus(thread, { type: "active", activeFlags: [] });
     }
     if (event.type === "turn.completed") {
@@ -4340,6 +4380,7 @@ export class AppServerHost {
       if (ephemeralTurn) {
         thread.ephemeralTurnIds.delete(event.turnId);
       } else {
+        this.#recordExternalTurnCompletion(thread, event.turnId, result.completedTurn);
         thread.turns.push(result.completedTurn);
         thread.projectedTerminalTurnId = event.turnId;
         thread.thread.updatedAt = completedAt;
@@ -4842,6 +4883,45 @@ export class AppServerHost {
 
   async #waitForTurnResponse(thread: ExternalThread, turnId: HostTurnId): Promise<void> {
     await thread.responseGates.get(turnId)?.promise;
+  }
+
+  #recordExternalTurnStart(thread: ExternalThread, turnId: HostTurnId, autonomous: boolean): void {
+    if (thread.record.ephemeral || thread.ephemeralTurnIds.has(turnId)) return;
+    this.#usageLedger.externalTurnStarted({
+      threadId: thread.id,
+      turnId,
+      usage: thread.latestUsage,
+      hasPriorTurns: thread.turns.length > 0 || thread.record.turnMappings.length > 0,
+      autonomous,
+    });
+  }
+
+  #recordExternalTurnCompletion(
+    thread: ExternalThread,
+    turnId: HostTurnId,
+    completedTurn: JsonObject,
+  ): void {
+    if (thread.record.ephemeral) return;
+    const state = thread.stateObserver.state;
+    const modelId = state.effectiveModel?.id ?? thread.requestedModel?.id;
+    const thinkingOptionId = state.effectiveThinkingOptionId ?? thread.requestedThinkingOptionId;
+    this.#usageLedger.externalTurnCompleted({
+      threadId: thread.id,
+      turnId,
+      harnessId: thread.harnessId,
+      cwd: thread.cwd,
+      ...(modelId ? { modelId } : {}),
+      ...(state.resolvedModelLabel ? { modelLabel: state.resolvedModelLabel } : {}),
+      ...(thinkingOptionId ? { thinkingOptionId } : {}),
+      outcome:
+        completedTurn.status === "failed"
+          ? "failed"
+          : completedTurn.status === "interrupted"
+            ? "interrupted"
+            : "completed",
+      durationMs: typeof completedTurn.durationMs === "number" ? completedTurn.durationMs : null,
+      usage: thread.latestUsage,
+    });
   }
 
   #latestCompletedTurnId(thread: ExternalThread): HostTurnId | null {

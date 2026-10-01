@@ -20,6 +20,7 @@ This index lists current documents and historical archives by feature area. Prop
 | [`architecture/harness-session-import.md`](architecture/harness-session-import.md) | Local Session import contracts and recovery boundaries. |
 | [`architecture/external-thread-steering.md`](architecture/external-thread-steering.md) | External steering: cancel the old Turn, then start the new input. |
 | [`architecture/thread-watch.md`](architecture/thread-watch.md) | One-time Thread stop notifications, results, delivery, and limits. |
+| [`architecture/usage-ledger.md`](architecture/usage-ledger.md) | Per-Turn usage ledger, how each Turn's share is derived, and the limits of the Settings → Usage comparison. |
 | [`architecture/app-server-transport.md`](architecture/app-server-transport.md) | WebSocket/JSONL boundaries for large native history responses and forwarding performance. |
 | [`architecture/acp-layer-follow-up.md`](architecture/acp-layer-follow-up.md) | Conditions and ownership for extracting shared ACP mechanisms. |
 

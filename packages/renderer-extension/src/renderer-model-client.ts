@@ -11,6 +11,11 @@ import {
   LOADED_SESSIONS_METHOD,
   loadedSessionsSchema,
   type LoadedSession,
+  USAGE_LEDGER_SUMMARY_METHOD,
+  usageLedgerSummaryParamsSchema,
+  usageLedgerSummaryResultSchema,
+  type UsageLedgerSummaryParams,
+  type UsageLedgerSummaryResult,
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
   harnessAccountInspectParamsSchema,
@@ -177,6 +182,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   setHarnessLaunchSettings?(input: HarnessLaunchSettingsSet): Promise<HarnessLaunchSettings>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
+  readUsageLedgerSummary?(params: UsageLedgerSummaryParams): Promise<UsageLedgerSummaryResult>;
   currentHostId?(): string | null;
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
   clientForHost?(hostId: string): RendererModelClient | null;
@@ -362,6 +368,16 @@ export function createRendererModelClient(
     },
     async listLoadedSessions(): Promise<LoadedSession[]> {
       return loadedSessionsSchema.parse(await manager.sendRequest(LOADED_SESSIONS_METHOD, {}));
+    },
+    async readUsageLedgerSummary(
+      params: UsageLedgerSummaryParams,
+    ): Promise<UsageLedgerSummaryResult> {
+      return usageLedgerSummaryResultSchema.parse(
+        await manager.sendRequest(
+          USAGE_LEDGER_SUMMARY_METHOD,
+          usageLedgerSummaryParamsSchema.parse(params),
+        ),
+      );
     },
     async setIdleReleaseSettings(settings: IdleReleaseSettings): Promise<IdleReleaseSettings> {
       const params = idleReleaseSettingsSchema.parse(settings);
