@@ -104,9 +104,6 @@ jobs:
           - target: macos-arm64
             runner: macos-14
             rustTarget: aarch64-apple-darwin
-          - target: macos-x64
-            runner: macos-15-intel
-            rustTarget: x86_64-apple-darwin
           - target: windows-x64
             runner: windows-latest
             rustTarget: x86_64-pc-windows-msvc
@@ -346,7 +343,6 @@ jobs:
           set -euo pipefail
           expected=(
             "codex-z-${VERSION}-macos-arm64.dmg"
-            "codex-z-${VERSION}-macos-x64.dmg"
             "codex-z-${VERSION}-windows-x64.exe"
             "codex-z-${VERSION}-windows-arm64.exe"
           )

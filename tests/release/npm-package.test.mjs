@@ -171,7 +171,7 @@ async function createNpmMetaPackageFixture(root) {
 
 async function createLauncherLifecycleFixture(root, platform) {
   const launcherPath = path.join(root, "node_modules", "@codex-z", "cli", "bin", "codex-z.js");
-  const platformPackage = `@codex-z/cli-${platform}-x64`;
+  const platformPackage = `@codex-z/cli-${platform}-${platform === "darwin" ? "arm64" : "x64"}`;
   const platformRoot = path.join(root, "node_modules", ...platformPackage.split("/"));
   const executableSuffix = platform === "win32" ? ".exe" : "";
   const npmCliPath = path.join(root, "npm-cli.js");
@@ -206,7 +206,7 @@ Object.defineProperty(process, "platform", {
 });
 Object.defineProperty(process, "arch", {
   configurable: true,
-  value: "x64",
+  value: process.env.CODEX_Z_TEST_PLATFORM === "darwin" ? "arm64" : "x64",
 });
 if (process.env.CODEX_Z_TEST_TTY === "1") {
   Object.defineProperty(process.stdout, "isTTY", {
@@ -240,7 +240,10 @@ async function runLauncherLifecycle(
       await createLauncherLifecycleFixture(root, platform);
     await writeFile(
       path.join(platformRoot, "package.json"),
-      JSON.stringify({ name: `@codex-z/cli-${platform}-x64`, version: platformVersion }),
+      JSON.stringify({
+        name: `@codex-z/cli-${platform}-${platform === "darwin" ? "arm64" : "x64"}`,
+        version: platformVersion,
+      }),
     );
     const environment = {
       ...process.env,
@@ -282,7 +285,7 @@ import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 
 Object.defineProperty(process, "platform", { configurable: true, value: process.env.CODEX_Z_TEST_PLATFORM });
-Object.defineProperty(process, "arch", { configurable: true, value: "x64" });
+Object.defineProperty(process, "arch", { configurable: true, value: process.env.CODEX_Z_TEST_PLATFORM === "darwin" ? "arm64" : "x64" });
 const exitCodes = JSON.parse(process.env.CODEX_Z_TEST_EXIT_CODES);
 let call = 0;
 childProcess.spawn = (command, args, options) => {
@@ -329,7 +332,9 @@ syncBuiltinESMExports();
 describe("npm package release", () => {
   it("maps the current host to a release target id", () => {
     expect(hostReleaseTargetId("darwin", "arm64")).toBe("macos-arm64");
-    expect(hostReleaseTargetId("darwin", "x64")).toBe("macos-x64");
+    expect(() => hostReleaseTargetId("darwin", "x64")).toThrow(
+      "unsupported npm release host: darwin/x64",
+    );
     expect(hostReleaseTargetId("win32", "x64")).toBe("windows-x64");
     expect(hostReleaseTargetId("win32", "arm64")).toBe("windows-arm64");
     expect(hostReleaseTargetId("linux", "x64")).toBe("linux-x64");
@@ -595,10 +600,12 @@ describe("npm package release", () => {
         const result = await runLauncherLifecycle(platform, { platformVersion });
         expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain("platform package version mismatch");
-        expect(result.stderr).toContain(`@codex-z/cli-${platform}-x64`);
+        expect(result.stderr).toContain(
+          `@codex-z/cli-${platform}-${platform === "darwin" ? "arm64" : "x64"}`,
+        );
         expect(result.stderr).toContain("expected 0.1.0");
         expect(result.stderr).toContain(
-          `npm install -g @codex-z/cli@0.1.0 @codex-z/cli-${platform}-x64@0.1.0`,
+          `npm install -g @codex-z/cli@0.1.0 @codex-z/cli-${platform}-${platform === "darwin" ? "arm64" : "x64"}@0.1.0`,
         );
         expect(result.stderr).not.toContain("received Launcher ready");
         expect(result.stdout).not.toContain("startup:");
@@ -742,7 +749,6 @@ describe("npm package release", () => {
     expect(source).toContain('NPM_PACKAGE_NAME = "@codex-z/cli"');
     expect(Object.values(NPM_PLATFORM_PACKAGE_NAMES)).toEqual([
       "@codex-z/cli-darwin-arm64",
-      "@codex-z/cli-darwin-x64",
       "@codex-z/cli-win32-x64",
       "@codex-z/cli-win32-arm64",
       "@codex-z/cli-linux-x64",
@@ -752,7 +758,7 @@ describe("npm package release", () => {
     expect(source).toContain('access: "public"');
   });
 
-  it("names npm tarballs with the release target so four matrix jobs do not collide", () => {
+  it("names npm tarballs with the release target so matrix jobs do not collide", () => {
     expect(npmTarballFileName({ version: "0.1.0", target: releaseTarget("macos-arm64") })).toBe(
       "codex-z-cli-0.1.0-macos-arm64.tgz",
     );

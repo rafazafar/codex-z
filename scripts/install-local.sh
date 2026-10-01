@@ -47,9 +47,8 @@ fi
 
 case "$(uname -m)" in
   arm64) TARGET="macos-arm64" ;;
-  x86_64) TARGET="macos-x64" ;;
   *)
-    echo "error: unsupported macOS architecture: $(uname -m)" >&2
+    echo "error: local installation requires Apple Silicon (arm64); detected $(uname -m)" >&2
     exit 1
     ;;
 esac

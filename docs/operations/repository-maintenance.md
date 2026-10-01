@@ -102,9 +102,11 @@ Release validation in `release-packages.yml` remains separate from PR comments:
 4. Build and publish a fixed commit SHA. Before publication, revalidate the remote tag object SHA, commit membership in `main`, CI run ID/attempt, and result.
 5. Stop publication if validation fails. Do not change versions automatically, wait and retry, or relax conditions. Maintainers must investigate and prepare the release again manually.
 
+macOS release builds support Apple Silicon (`arm64`) only. The release workflow does not build or publish macOS x64 installers or npm packages.
+
 ### npm authentication for the fork
 
-Before the first npm release, obtain publish access to the `@codex-z` scope. The workflow publishes `@codex-z/cli` and six platform packages: `cli-darwin-arm64`, `cli-darwin-x64`, `cli-win32-x64`, `cli-win32-arm64`, `cli-linux-x64`, and `cli-linux-arm64`, all under that scope.
+Before the first npm release, obtain publish access to the `@codex-z` scope. The workflow publishes `@codex-z/cli` and five platform packages: `cli-darwin-arm64`, `cli-win32-x64`, `cli-win32-arm64`, `cli-linux-x64`, and `cli-linux-arm64`, all under that scope.
 
 For initial publication before package-level trusted publishers exist, create a short-lived granular npm token with read/write publish permission for the scope and Bypass 2FA enabled for unattended publication. Store it as the `NPM_TOKEN` Actions secret in `rafazafar/codex-z`. See [npm access-token configuration](https://docs.npmjs.com/creating-and-viewing-access-tokens/).
 

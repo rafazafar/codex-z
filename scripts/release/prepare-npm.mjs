@@ -25,7 +25,6 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 export const NPM_PACKAGE_NAME = "@codex-z/cli";
 export const NPM_PLATFORM_PACKAGE_NAMES = Object.freeze({
   "macos-arm64": "@codex-z/cli-darwin-arm64",
-  "macos-x64": "@codex-z/cli-darwin-x64",
   "windows-x64": "@codex-z/cli-win32-x64",
   "windows-arm64": "@codex-z/cli-win32-arm64",
   "linux-x64": "@codex-z/cli-linux-x64",
@@ -33,7 +32,6 @@ export const NPM_PLATFORM_PACKAGE_NAMES = Object.freeze({
 });
 export const NPM_RUNTIME_PLATFORM_PACKAGES = Object.freeze({
   "darwin-arm64": NPM_PLATFORM_PACKAGE_NAMES["macos-arm64"],
-  "darwin-x64": NPM_PLATFORM_PACKAGE_NAMES["macos-x64"],
   "win32-x64": NPM_PLATFORM_PACKAGE_NAMES["windows-x64"],
   "win32-arm64": NPM_PLATFORM_PACKAGE_NAMES["windows-arm64"],
   "linux-x64": NPM_PLATFORM_PACKAGE_NAMES["linux-x64"],

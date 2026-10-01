@@ -14,18 +14,6 @@ export const RELEASE_TARGETS = Object.freeze({
     nodeArchiveRoot: `node-v${NODE_VERSION}-darwin-arm64`,
     nodeExecutable: "bin/node",
   }),
-  "macos-x64": Object.freeze({
-    id: "macos-x64",
-    hostPlatform: "darwin",
-    rustTarget: "x86_64-apple-darwin",
-    installerArchitecture: "x64",
-    executableSuffix: "",
-    nodeArchive: `node-v${NODE_VERSION}-darwin-x64.tar.gz`,
-    nodeArchiveSha256: "527f0578d9812e7dfa225121bda0b1546a6a0e4b5f556295fc8299c272de5fbf",
-    nodeArchiveFormat: "tar.gz",
-    nodeArchiveRoot: `node-v${NODE_VERSION}-darwin-x64`,
-    nodeExecutable: "bin/node",
-  }),
   "windows-x64": Object.freeze({
     id: "windows-x64",
     hostPlatform: "win32",
@@ -97,7 +85,6 @@ export function releaseTargetForHost(name, hostPlatform = process.platform) {
 
 export function hostReleaseTargetId(platform = process.platform, arch = process.arch) {
   if (platform === "darwin" && arch === "arm64") return "macos-arm64";
-  if (platform === "darwin" && arch === "x64") return "macos-x64";
   if (platform === "win32" && arch === "x64") return "windows-x64";
   if (platform === "win32" && arch === "arm64") return "windows-arm64";
   if (platform === "linux" && arch === "x64") return "linux-x64";

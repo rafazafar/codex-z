@@ -91,7 +91,7 @@ describe("fixed Node.js Runtime", () => {
   });
 
   it("builds platform-specific extraction commands", () => {
-    expect(nodeExtractionCommand(releaseTarget("macos-x64"), "/node.tgz", "/out")).toEqual({
+    expect(nodeExtractionCommand(releaseTarget("macos-arm64"), "/node.tgz", "/out")).toEqual({
       command: "tar",
       args: ["-xzf", "/node.tgz", "-C", "/out"],
     });

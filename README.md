@@ -23,6 +23,8 @@ codex-z is an independently maintained fork. It keeps the official Codex path an
 
 ## Install
 
+macOS releases require Apple Silicon (`arm64`).
+
 Download macOS and Windows installers from [GitHub Releases](https://github.com/rafazafar/codex-z/releases). For npm distribution on macOS, Windows, or Linux:
 
 ```bash
