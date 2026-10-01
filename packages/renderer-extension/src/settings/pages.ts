@@ -29,6 +29,7 @@ import {
 import { createAppearanceSettingsPage } from "./appearance-page.js";
 import { createReportBugSettingsPage } from "./report-bug-page.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
+import { createUsageSettingsPage, type UsageLedgerClient } from "./usage-page.js";
 import { createReleaseNotesElement } from "./release-notes.js";
 import { createAccountsSettingsPage, type RendererCodexAccountClient } from "./accounts-page.js";
 
@@ -75,6 +76,7 @@ function windowsInstallerDownloadUrl(window: Window | null | undefined, version:
 export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "connections",
   "accounts",
+  "usage",
   "session-import",
   "appearance",
   "updates",
@@ -643,10 +645,12 @@ export function createDefaultRendererSettingsPages(
   openImportedThread: RendererImportedThreadOpener = () =>
     Promise.reject(new Error("Imported Thread navigation is unavailable")),
   getLoadedSessionsClient: () => LoadedSessionsClient | null = () => null,
+  getUsageLedgerClient: () => UsageLedgerClient | null = () => null,
 ): readonly RendererSettingsPageDefinition[] {
   return Object.freeze([
     createConnectionsSettingsPage(messages, getDiagnostics),
     createAccountsSettingsPage(messages, getAccountClient),
+    createUsageSettingsPage(messages, getUsageLedgerClient),
     createSessionImportSettingsPage(messages, getSessionImportClient, openImportedThread),
     createAppearanceSettingsPage(messages, getLoadedSessionsClient),
     updatesPage(messages, getUpdateClient),
