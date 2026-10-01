@@ -22,6 +22,8 @@ export interface UsageLedgerRow {
   readonly interruptedRate: number | null;
   readonly msPerSession: number | null;
   readonly costPerSession: number | null;
+  /** Some of the cost was priced from tokens at API rates, not reported by the Harness. */
+  readonly costEstimated: boolean;
   readonly tokensPerSession: number | null;
 }
 
@@ -29,15 +31,38 @@ function ratio(total: number, count: number): number | null {
   return count > 0 ? total / count : null;
 }
 
+const CLAUDE_MODEL_REF_PREFIX = "claude-model-v1.";
+
+/**
+ * Claude Code Model ids encode the alias as base64url. A Turn recorded before
+ * the real Model was known has only that id, so show the alias it spells.
+ */
+export function readableModelId(modelId: string | null): string {
+  if (!modelId?.startsWith(CLAUDE_MODEL_REF_PREFIX)) return modelId ?? "";
+  try {
+    const base64 = modelId
+      .slice(CLAUDE_MODEL_REF_PREFIX.length)
+      .replaceAll("-", "+")
+      .replaceAll("_", "/");
+    const alias = new TextDecoder().decode(
+      Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)),
+    );
+    return alias === "default" ? "Default" : alias;
+  } catch {
+    return modelId;
+  }
+}
+
 export function usageLedgerRow(summary: UsageLedgerModelSummary): UsageLedgerRow {
   return {
     summary,
-    model: summary.modelLabel ?? summary.modelId ?? "",
+    model: summary.modelLabel ?? readableModelId(summary.modelId),
     sessions: summary.sessions,
     turnsPerSession: ratio(summary.userTurns, summary.userSessions),
     interruptedRate: ratio(summary.interruptedTurns, summary.turns),
     msPerSession: ratio(summary.durationMs, summary.sessions),
     costPerSession: ratio(summary.costUsd, summary.costSessions),
+    costEstimated: summary.estimatedCostTurns > 0,
     tokensPerSession: ratio(summary.totalTokens, summary.tokenSessions),
   };
 }

@@ -54,6 +54,7 @@ describe("AppServerHost usage ledger", () => {
           totalTokens: 1_600,
           costSessions: 1,
           costTurns: 2,
+          estimatedCostTurns: 0,
           costUsd: 0.75,
         },
       ],

@@ -32,6 +32,7 @@ function summary(overrides: Partial<UsageLedgerModelSummary>): UsageLedgerModelS
     totalTokens: 0,
     costSessions: 0,
     costTurns: 0,
+    estimatedCostTurns: 0,
     costUsd: 0,
     lastTurnAtMs: 0,
     ...overrides,
@@ -99,5 +100,15 @@ describe("usage ledger metrics", () => {
     expect(formatUsageDuration(42_000)).toBe("42s");
     expect(formatUsageDuration(185_000)).toBe("3m 05s");
     expect(formatUsageDuration(3_900_000)).toBe("1h 05m");
+  });
+});
+
+describe("readableModelId", () => {
+  it("decodes Claude Code Model ids and leaves others alone", async () => {
+    const { readableModelId } = await import("../../src/settings/usage-ledger-metrics.js");
+    expect(readableModelId("claude-model-v1.c29ubmV0")).toBe("sonnet");
+    expect(readableModelId("claude-model-v1.ZGVmYXVsdA")).toBe("Default");
+    expect(readableModelId("gpt-6.1-sol")).toBe("gpt-6.1-sol");
+    expect(readableModelId(null)).toBe("");
   });
 });

@@ -61,6 +61,7 @@ import {
   threadUsageInspectionSchema,
   updateCheckResultSchema,
   updateEmptyParamsSchema,
+  updateStartParamsSchema,
   updateStartResultSchema,
   updateStatusResultSchema,
   type ExternalThreadForkParams,
@@ -205,7 +206,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     input: ThreadPermissionModeSelectParams,
   ): Promise<HarnessConfigurationState>;
   checkUpdate(): Promise<UpdateCheckResult | null>;
-  startUpdate(): Promise<UpdateStartResult>;
+  startUpdate(options?: { force?: boolean }): Promise<UpdateStartResult>;
   readUpdateStatus(): Promise<UpdateStatusResult>;
   inspectCodexAccountUsage?(input: CodexAccountUsageParams): Promise<CodexAccountUsageResult>;
   listHarnessAccountSources?(): Promise<HarnessAccountSourceListResult>;
@@ -492,10 +493,10 @@ export function createRendererModelClient(
       );
       return updateCheckResultSchema.nullable().parse(result);
     },
-    async startUpdate(): Promise<UpdateStartResult> {
+    async startUpdate(options?: { force?: boolean }): Promise<UpdateStartResult> {
       const result = await manager.sendRequest(
         UPDATE_START_METHOD,
-        updateEmptyParamsSchema.parse({}),
+        updateStartParamsSchema.parse(options?.force ? { force: true } : {}),
       );
       return updateStartResultSchema.parse(result);
     },

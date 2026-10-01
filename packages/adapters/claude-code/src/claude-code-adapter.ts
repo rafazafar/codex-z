@@ -57,6 +57,7 @@ import {
   harnessCommandCatalogSchema,
   type HarnessCommandCatalog,
   harnessIdSchema,
+  harnessResolvedModelLabelSchema,
   hostInteractionIdSchema,
   hostItemIdSchema,
   hostTurnIdSchema,
@@ -2152,10 +2153,21 @@ class ClaudeHarnessSession implements HarnessSession {
     }
   }
 
+  /**
+   * An alias such as "sonnet" names no concrete Model. The API reports the real
+   * one on every request, so publish it for the Usage history and Model labels.
+   */
+  #observeResolvedModel(model: string | undefined): void {
+    const parsed = harnessResolvedModelLabelSchema.safeParse(model);
+    if (!parsed.success || this.#state.resolvedModelLabel === parsed.data) return;
+    this.#publishState({ ...this.#state, resolvedModelLabel: parsed.data });
+  }
+
   #applyLatestRequestUsage(active: ActiveTurn, usage: ClaudeLastRequestUsage): void {
     const requestId = usage.requestId ?? `${active.nativeTurnKey}:${usage.model ?? "unknown"}`;
     if (active.usageRequestIds.has(requestId)) return;
     active.usageRequestIds.add(requestId);
+    this.#observeResolvedModel(usage.model);
     active.estimatedInputTokens +=
       usage.inputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens;
     active.estimatedOutputTokens += usage.outputTokens;

@@ -40,7 +40,8 @@ The settings page always reads the local Host, like Session Import.
 
 ## Boundaries
 
-- Cost is the Harness's own estimate; no price table is applied and nothing is inferred from Model names or Transcript text.
+- Cost is the Harness's own estimate where it reports one. Native Codex reports tokens but no cost, so `usage-pricing.ts` prices those tokens at OpenAI's published standard API rates, keyed by exact Model id (cached input inside `inputTokens` at the cached rate). This is applied when the ledger is read, so a corrected price table also fixes history. Such cost is counted in `estimatedCostTurns` and shown with a leading `~`. Models without a known price show no cost. Long-context and Fast-tier surcharges are not applied, because a line holds a Turn's totals rather than its requests.
+- A Claude Code Model id encodes the alias (for example `sonnet`). The Adapter publishes the concrete Model reported by the API as the resolved Model label, which the ledger stores as `modelLabel`; a Turn recorded without one is shown by its decoded alias.
 - Harnesses count tokens differently (for example whether cached input is part of input), so token totals are comparable within one Harness only.
 - A delegated Thread counts as `agent` for all its Turns, including a follow-up the user types there.
 - The ledger is local to the Host that ran the Turn. A remote Host keeps its own file, which the settings page does not read.

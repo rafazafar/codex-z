@@ -6,6 +6,7 @@ import type { UsageLedgerModelSummary, UsageLedgerSummaryResult } from "@codex-z
 import { z } from "zod";
 
 import { defaultMappingStoreDirectory } from "./external-thread-repository.js";
+import { estimateApiCostUsd } from "./usage-pricing.js";
 
 /** Cumulative Native Session counters. Other HostUsage fields are point-in-time gauges. */
 const COUNTER_FIELDS = [
@@ -192,6 +193,7 @@ export function summarizeUsageLedger(
           totalTokens: 0,
           costSessions: 0,
           costTurns: 0,
+          estimatedCostTurns: 0,
           costUsd: 0,
           lastTurnAtMs: 0,
         },
@@ -225,10 +227,17 @@ export function summarizeUsageLedger(
       summary.outputTokens += Math.round(usage.outputTokens ?? 0);
       summary.reasoningOutputTokens += Math.round(usage.reasoningOutputTokens ?? 0);
     }
-    if (usage.totalCostUsd !== undefined) {
+    const reported = usage.totalCostUsd;
+    const estimated =
+      reported === undefined
+        ? estimateApiCostUsd(record.harnessId, record.modelId, usage)
+        : undefined;
+    const cost = reported ?? estimated;
+    if (cost !== undefined) {
       group.costSessions.add(record.threadId);
       summary.costTurns += 1;
-      summary.costUsd += usage.totalCostUsd;
+      if (estimated !== undefined) summary.estimatedCostTurns += 1;
+      summary.costUsd += cost;
     }
   }
   const models = [...groups.values()].map((group) => ({
