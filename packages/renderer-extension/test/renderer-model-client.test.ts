@@ -350,6 +350,7 @@ describe("Renderer fixed Model request client", () => {
       "readUpdateStatus",
       "readUsageLedgerSummary",
       "refreshCodexAccounts",
+      "resetUsageLedger",
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",

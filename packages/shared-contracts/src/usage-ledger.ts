@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const USAGE_LEDGER_SUMMARY_METHOD = "codex-z/usage-ledger/summary";
+export const USAGE_LEDGER_RESET_METHOD = "codex-z/usage-ledger/reset";
 
 const countSchema = z.number().int().nonnegative();
 

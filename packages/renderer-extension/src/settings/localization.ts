@@ -49,6 +49,10 @@ export interface RendererSettingsMessages {
     unknownModel: string;
     rowDetail: string;
     recordingSince: string;
+    reset: string;
+    resetHelp: string;
+    resetConfirm: string;
+    resetFailed: string;
     notes: readonly string[];
   };
   readonly loadedSessions: {
@@ -304,7 +308,8 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
         "Messages you sent per Session. Delegated, subagent and autonomous Turns are not counted.",
       interruptedRate: "Share of Turns you stopped or redirected before they finished",
       msPerSession: "Time the Model spent working per Session",
-      costPerSession: "Cost estimate per Session: the Harness's own, or API rates applied to tokens (~)",
+      costPerSession:
+        "Cost estimate per Session: the Harness's own, or API rates applied to tokens (~)",
       tokensPerSession: "Tokens per Session, as the Harness reports them",
       avgTps:
         "Average output tokens per second across measured Turns, including Tool calls and other waits.",
@@ -319,6 +324,10 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     rowDetail:
       "{turns} Turns · {failed} failed · {cost} total · {tokens} tokens · {perTurn} per Turn",
     recordingSince: "Recording since {date}, on this machine only.",
+    reset: "Reset",
+    resetHelp: "Clear usage history and start recording again",
+    resetConfirm: "Reset usage history? This clears all recorded Turns and cannot be undone.",
+    resetFailed: "Could not reset usage.",
     notes: [
       "Cost is each Harness's own estimate where it reports one. Codex reports none, so a leading ~ marks a cost estimated from tokens at published API rates. On a subscription it is not what you pay.",
       "Harnesses count tokens differently, for example whether cached input is included, so compare tokens within one Harness.",
@@ -541,7 +550,8 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     "{count} running. Updating restarts codex-z and stops them, and anything unfinished is lost.",
   updateStopAndRestart: "Stop and restart",
   updateWaitForIdle: "Update when idle",
-  updateWaitingForIdle: "Waiting for running tasks to finish. The update starts when they are done.",
+  updateWaitingForIdle:
+    "Waiting for running tasks to finish. The update starts when they are done.",
   updateCancel: "Cancel",
   updateChecking: "Checking for updates...",
   updateDownloading: "Downloading update...",
@@ -637,6 +647,10 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     unknownModel: "未知 Model",
     rowDetail: "{turns} 轮 · {failed} 轮失败 · 合计 {cost} · {tokens} Token · 每轮 {perTurn}",
     recordingSince: "自 {date} 起记录，仅限本机。",
+    reset: "重置",
+    resetHelp: "清除用量历史并重新开始记录",
+    resetConfirm: "重置用量历史？这将清除所有已记录的 Turn，且无法撤销。",
+    resetFailed: "无法重置用量。",
     notes: [
       "费用优先采用各 Harness 自身上报的估算。Codex 不上报费用，带 ~ 前缀的是按公开 API 价格根据 Token 估算的费用；订阅套餐下并非实际支付金额。",
       "各 Harness 统计 Token 的口径不同（例如是否包含缓存输入），请只在同一 Harness 内比较 Token。",

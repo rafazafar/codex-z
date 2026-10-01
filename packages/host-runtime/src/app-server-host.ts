@@ -3,6 +3,7 @@ import {
   IDLE_RELEASE_SETTINGS_METHOD,
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
+  USAGE_LEDGER_RESET_METHOD,
   USAGE_LEDGER_SUMMARY_METHOD,
   idleReleaseSettingsSchema,
   usageLedgerSummaryParamsSchema,
@@ -1142,6 +1143,17 @@ export class AppServerHost {
           await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(summary) }));
         } catch {
           await this.#writer.json(rpcError(request, -32076, "Usage ledger could not be read"));
+        }
+      });
+      return;
+    }
+    if (request.method === USAGE_LEDGER_RESET_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          await this.#usageLedger.reset();
+          await this.#writer.json(rpcEnvelope(request, { result: {} }));
+        } catch {
+          await this.#writer.json(rpcError(request, -32076, "Usage ledger could not be reset"));
         }
       });
       return;

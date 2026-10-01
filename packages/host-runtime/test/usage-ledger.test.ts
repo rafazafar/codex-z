@@ -83,6 +83,15 @@ describe("usage ledger store", () => {
     expect(records[1]?.usage).toEqual({ totalCostUsd: 3 });
   });
 
+  it("hides Turns before a reset but keeps them as baselines", async () => {
+    await store.append(turn({ cumulative: { totalTokens: 10 } }));
+    await store.reset(100_000);
+    await store.append(turn({ turnId: "turn-2", completedAtMs: 200_000 }));
+
+    expect((await store.readVisible()).map(({ turnId }) => turnId)).toEqual(["turn-2"]);
+    expect((await store.read()).map(({ turnId }) => turnId)).toEqual(["turn-1", "turn-2"]);
+  });
+
   it("reads a missing ledger as empty", async () => {
     expect(await store.read()).toEqual([]);
   });

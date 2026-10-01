@@ -290,10 +290,16 @@ export class UsageLedgerRecorder {
 
   async summary(params: UsageLedgerSummaryParams): Promise<UsageLedgerSummaryResult> {
     await this.#queue;
-    return summarizeUsageLedger(await this.#options.store.read(), {
+    return summarizeUsageLedger(await this.#options.store.readVisible(), {
       ...(params.sinceMs === undefined ? {} : { sinceMs: params.sinceMs }),
       harnessName: (harnessId) => this.#options.harnessName(harnessId),
     });
+  }
+
+  /** Clears the visible history. Cumulative baselines survive so the next Turn is not over-counted. */
+  async reset(): Promise<void> {
+    await this.#queue;
+    await this.#options.store.reset((this.#options.now ?? Date.now)());
   }
 
   /** Resolves once every observation accepted so far has been recorded. */

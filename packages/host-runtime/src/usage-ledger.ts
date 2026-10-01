@@ -60,6 +60,8 @@ export const usageLedgerTurnRecordSchema = z.object({
 });
 export type UsageLedgerTurnRecord = z.infer<typeof usageLedgerTurnRecordSchema>;
 
+const resetMarkerSchema = z.object({ v: z.literal(1), resetAtMs: timestampSchema });
+
 export function usageCounters(usage: HostUsage | null | undefined): UsageCounters | null {
   if (!usage) return null;
   const counters: UsageCounters = {};
@@ -111,15 +113,42 @@ export class UsageLedgerStore {
     return write;
   }
 
+  /**
+   * Hides every Turn completed before `atMs` from summaries. Turns stay on
+   * disk because their cumulative counters are the baseline for the next Turn.
+   */
+  reset(atMs: number): Promise<void> {
+    const line = `${JSON.stringify({ v: 1, resetAtMs: atMs })}\n`;
+    const write = this.#tail.then(async () => {
+      await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+      await appendFile(this.file, line, { encoding: "utf8", mode: 0o600 });
+    });
+    this.#tail = write.catch(() => undefined);
+    return write;
+  }
+
   async read(): Promise<UsageLedgerTurnRecord[]> {
+    return (await this.#load()).records;
+  }
+
+  /** Turns recorded since the latest reset. */
+  async readVisible(): Promise<UsageLedgerTurnRecord[]> {
+    const { records, resetAtMs } = await this.#load();
+    return resetAtMs === 0
+      ? records
+      : records.filter((record) => record.completedAtMs >= resetAtMs);
+  }
+
+  async #load(): Promise<{ records: UsageLedgerTurnRecord[]; resetAtMs: number }> {
     await this.#tail;
     let text: string;
     try {
       text = await readFile(this.file, "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { records: [], resetAtMs: 0 };
       throw error;
     }
+    let resetAtMs = 0;
     const byTurn = new Map<string, UsageLedgerTurnRecord>();
     for (const line of text.split("\n")) {
       if (!line.trim()) continue;
@@ -130,13 +159,18 @@ export class UsageLedgerStore {
         // A torn or foreign line must not hide the rest of the ledger.
         continue;
       }
+      const marker = resetMarkerSchema.safeParse(value);
+      if (marker.success) {
+        resetAtMs = Math.max(resetAtMs, marker.data.resetAtMs);
+        continue;
+      }
       const parsed = usageLedgerTurnRecordSchema.safeParse(value);
       if (!parsed.success) continue;
       const key = `${parsed.data.threadId}\u0000${parsed.data.turnId}`;
       byTurn.delete(key);
       byTurn.set(key, parsed.data);
     }
-    return [...byTurn.values()];
+    return { records: [...byTurn.values()], resetAtMs };
   }
 }
 

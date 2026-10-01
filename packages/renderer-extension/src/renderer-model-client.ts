@@ -12,6 +12,7 @@ import {
   loadedSessionsSchema,
   type LoadedSession,
   USAGE_LEDGER_SUMMARY_METHOD,
+  USAGE_LEDGER_RESET_METHOD,
   usageLedgerSummaryParamsSchema,
   usageLedgerSummaryResultSchema,
   type UsageLedgerSummaryParams,
@@ -184,6 +185,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
   readUsageLedgerSummary?(params: UsageLedgerSummaryParams): Promise<UsageLedgerSummaryResult>;
+  resetUsageLedger?(): Promise<void>;
   currentHostId?(): string | null;
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
   clientForHost?(hostId: string): RendererModelClient | null;
@@ -379,6 +381,9 @@ export function createRendererModelClient(
           usageLedgerSummaryParamsSchema.parse(params),
         ),
       );
+    },
+    async resetUsageLedger(): Promise<void> {
+      await manager.sendRequest(USAGE_LEDGER_RESET_METHOD, {});
     },
     async setIdleReleaseSettings(settings: IdleReleaseSettings): Promise<IdleReleaseSettings> {
       const params = idleReleaseSettingsSchema.parse(settings);

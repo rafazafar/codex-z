@@ -19,6 +19,7 @@ import {
 
 export interface UsageLedgerClient {
   readUsageLedgerSummary?(params: UsageLedgerSummaryParams): Promise<UsageLedgerSummaryResult>;
+  resetUsageLedger?(): Promise<void>;
 }
 
 export const USAGE_LEDGER_RANGES = ["7d", "30d", "all"] as const;
@@ -64,6 +65,14 @@ export function createUsageSettingsPage(
         "mb-3 inline-flex gap-0.5 rounded-lg border border-settings-border bg-settings-panel p-0.5";
       ranges.setAttribute("role", "group");
       ranges.setAttribute("aria-label", text.rangeLabel);
+
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.dataset.usageReset = "";
+      reset.className =
+        "ml-3 cursor-pointer rounded-lg border border-settings-border bg-transparent px-2.5 py-1 text-xs text-settings-muted hover:text-settings-text disabled:cursor-default disabled:opacity-50";
+      reset.textContent = text.reset;
+      reset.title = text.resetHelp;
 
       const status = document.createElement("p");
       status.className = "m-0 px-4 py-6 text-[13px] text-settings-muted";
@@ -244,7 +253,29 @@ export function createUsageSettingsPage(
       renderHead();
       show(text.loading);
 
-      context.content.append(heading, description, ranges, card, notes);
+      reset.addEventListener("click", () => {
+        const client = getClient();
+        const resetLedger = client?.resetUsageLedger?.bind(client);
+        if (!resetLedger) {
+          show(text.unavailable);
+          return;
+        }
+        if (!document.defaultView?.confirm(text.resetConfirm)) return;
+        reset.disabled = true;
+        resetLedger().then(
+          () => {
+            reset.disabled = false;
+            rows = [];
+            load();
+          },
+          () => {
+            reset.disabled = false;
+            show(text.resetFailed);
+          },
+        );
+      });
+
+      context.content.append(heading, description, ranges, reset, card, notes);
       load();
       return undefined;
     },
