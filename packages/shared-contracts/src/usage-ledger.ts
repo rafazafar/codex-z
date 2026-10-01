@@ -38,6 +38,8 @@ export const usageLedgerModelSummarySchema = z.strictObject({
   totalTokens: countSchema,
   costSessions: countSchema,
   costTurns: countSchema,
+  /** Of `costTurns`, those priced from tokens at API rates because the Harness reported no cost. */
+  estimatedCostTurns: countSchema,
   costUsd: z.number().nonnegative(),
   lastTurnAtMs: countSchema,
 });

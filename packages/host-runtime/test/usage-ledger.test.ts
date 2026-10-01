@@ -128,11 +128,13 @@ describe("usage ledger summary", () => {
       totalTokens: 140,
       costSessions: 2,
       costTurns: 2,
+      estimatedCostTurns: 0,
       costUsd: 2,
     });
     expect(summary.models.find(({ modelId }) => modelId === "model-b")).toMatchObject({
       failedTurns: 1,
       costTurns: 0,
+      estimatedCostTurns: 0,
       costUsd: 0,
     });
   });

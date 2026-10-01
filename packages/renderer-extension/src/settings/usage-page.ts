@@ -32,7 +32,10 @@ function cellText(row: UsageLedgerRow, column: Exclude<UsageLedgerColumn, "model
   if (column === "turnsPerSession") return formatUsageAverage(row.turnsPerSession);
   if (column === "interruptedRate") return formatUsagePercent(row.interruptedRate);
   if (column === "msPerSession") return formatUsageDuration(row.msPerSession);
-  if (column === "costPerSession") return formatUsageCost(row.costPerSession);
+  if (column === "costPerSession") {
+    const cost = formatUsageCost(row.costPerSession);
+    return row.costEstimated && row.costPerSession !== null ? `~${cost}` : cost;
+  }
   return formatUsageCount(row.tokensPerSession);
 }
 
@@ -93,7 +96,10 @@ export function createUsageSettingsPage(
           tr.title = text.rowDetail
             .replace("{turns}", String(summary.turns))
             .replace("{failed}", String(summary.failedTurns))
-            .replace("{cost}", formatUsageCost(summary.costTurns > 0 ? summary.costUsd : null))
+            .replace(
+              "{cost}",
+              `${summary.estimatedCostTurns > 0 ? "~" : ""}${formatUsageCost(summary.costTurns > 0 ? summary.costUsd : null)}`,
+            )
             .replace(
               "{tokens}",
               formatUsageCount(summary.tokenTurns > 0 ? summary.totalTokens : null),
