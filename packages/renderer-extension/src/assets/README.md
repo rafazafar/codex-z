@@ -1,10 +1,5 @@
 # Renderer brand assets
 
-`codex-logo.png` is the Codex X mark
-source and `codex-logo-transparent.png` is its white-background-free square
-variant. `codex-logo-bright.png` recolors that mark in the official bright
-Codex blue so it stays visible on dark surfaces.
-
 `codex-z-app-icon.svg` is the vector master of the codex-z brand icon: a
 light gray rounded tile with a charcoal C and central rounded square, padded to
 the macOS icon grid. It is the Renderer settings brand icon (settings header
