@@ -6,47 +6,13 @@
 
 Run Claude Code, Pi, OpenCode, and other Agent Harnesses inside Codex Desktop.
 
-[Download](https://github.com/rafazafar/codex-z/releases) · [Get started](#install) · [Screenshots](#see-it-in-action) · [Documentation](docs/index.md) · [한국어](docs/project/README.ko.md)
+[Download](https://github.com/rafazafar/codex-z/releases) · [Get started](#install) · [Documentation](docs/index.md) · [한국어](docs/project/README.ko.md)
 
 </div>
 
 Keep your projects, conversations, and code review in one window. Choose a Harness for each Thread. Delegate a task to another Agent and open its conversation to check the result. Each Harness keeps its own native session and tools.
 
 codex-z is an independently maintained fork. It keeps the official Codex path and connects each external Harness through its native interface. The project is not an OpenAI product.
-
-## See it in action
-
-**Review the work where it happens.** Read the conversation and inspect file changes side by side in Codex Desktop.
-
-<p align="center">
-  <a href="docs/imgs/upstream-review.png"><img width="100%" src="docs/imgs/upstream-review.png" alt="Upstream interface: a Pi conversation on the left and Python file changes in the review panel on the right" /></a>
-</p>
-
-<sub>These screenshots show the upstream interface in Chinese. They retain its original branding; labels and controls can differ in codex-z. See [source provenance](NOTICE).</sub>
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <p><strong>Choose your Harness</strong><br />Start a Thread with Claude Code, Pi, Grok, or another installed Harness. Each Thread belongs to one Harness.</p>
-      <a href="docs/imgs/upstream-harness-selector.png"><img width="100%" src="docs/imgs/upstream-harness-selector.png" alt="Upstream interface: the Agent selector lists Codex, Pi, Claude Code, DeepSeek Harness, Grok, and Oh My Pi" /></a>
-    </td>
-    <td width="50%" valign="top">
-      <p><strong>Delegate from the conversation</strong><br />Type # to choose another Agent for a separate task. Open its Thread to check progress or continue the work.</p>
-      <a href="docs/imgs/upstream-delegation.png"><img width="100%" src="docs/imgs/upstream-delegation.png" alt="Upstream interface: typing # opens the delegation menu above a prompt with Codex, Claude Code, and Grok mentions" /></a>
-    </td>
-  </tr>
-</table>
-
-<details>
-<summary>Inspect a subagent's work</summary>
-
-Open a subagent's conversation beside the parent Thread when the Harness and its installed extensions support it.
-
-<a href="docs/imgs/upstream-subagents.png"><img width="100%" src="docs/imgs/upstream-subagents.png" alt="Upstream interface: four completed subagents in the parent conversation, with one subagent's conversation open on the right" /></a>
-
-</details>
-
-Capabilities depend on the Harness and its native interface. See the [feature matrix](#feature-status) and [capability limits](docs/harnesses/capability-boundaries.md) before you choose a workflow.
 
 ## Why codex-z
 
