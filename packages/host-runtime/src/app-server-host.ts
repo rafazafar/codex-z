@@ -595,6 +595,7 @@ export class AppServerHost {
   readonly #desktopRequests = new DesktopRequestQueue();
   #drainActiveWorkOnInputEnd = false;
   readonly #turnLeases: ExternalTurnLeases;
+  readonly #unsubscribeTurnLeases: () => void;
   #desktopInputEnded = false;
 
   constructor(options: AppServerHostOptions) {
@@ -689,6 +690,13 @@ export class AppServerHost {
       }
     }
     this.#turnLeases = options.externalTurnLeases ?? new ExternalTurnLeases();
+    this.#unsubscribeTurnLeases = this.#turnLeases.subscribe((threadId) => {
+      const thread = this.#externalRuntime.get(threadId);
+      if (!thread?.restoredWhileLeased || thread.running || this.#closeRequested) return;
+      void this.#setThreadStatus(thread, { type: "idle" }).catch((error: unknown) =>
+        this.#diagnose(error),
+      );
+    });
     this.#externalRuntime = new ExternalThreadRuntime({
       adapters: this.#externalAdapters,
       environment: this.#options.environment ?? process.env,
@@ -848,6 +856,7 @@ export class AppServerHost {
           Promise.resolve().then(() => adapter.close()),
         ),
       );
+      this.#unsubscribeTurnLeases();
       this.#unregisterDelegationApi?.();
       this.#unregisterDelegationApi = undefined;
       this.#unsubscribeAccountState?.();
@@ -2984,6 +2993,12 @@ export class AppServerHost {
       );
       return;
     }
+    if (this.#turnLeases.heldByOther(thread.id, this)) {
+      await this.#writer.json(
+        rpcError(request, -32072, "External Thread already has an active Turn"),
+      );
+      return;
+    }
     if (!thread.session.capabilities.configuration.selectModel) {
       await this.#writer.json(
         rpcError(request, -32078, "External Harness does not support Model selection"),
@@ -3042,6 +3057,12 @@ export class AppServerHost {
     if (!thread) {
       await this.#writer.json(
         rpcError(request, -32078, "Thinking selection requires a current-process external Thread"),
+      );
+      return;
+    }
+    if (this.#turnLeases.heldByOther(thread.id, this)) {
+      await this.#writer.json(
+        rpcError(request, -32072, "External Thread already has an active Turn"),
       );
       return;
     }
@@ -3137,6 +3158,12 @@ export class AppServerHost {
           -32078,
           "Permission Mode selection requires a current-process external Thread",
         ),
+      );
+      return;
+    }
+    if (this.#turnLeases.heldByOther(thread.id, this)) {
+      await this.#writer.json(
+        rpcError(request, -32072, "External Thread already has an active Turn"),
       );
       return;
     }
@@ -3380,6 +3407,21 @@ export class AppServerHost {
     const location = await this.#locateExternalThread(threadId);
     if (location.kind !== "external") return location;
     await this.#waitForPlugins();
+    const resolution = await this.#externalRuntime.resolve(threadId);
+    if (
+      resolution.kind !== "external" ||
+      !resolution.thread.restoredWhileLeased ||
+      this.#turnLeases.heldByOther(threadId, this)
+    ) {
+      return resolution;
+    }
+    // The Turn that held this native session finished after we restored it, so
+    // our Harness handle predates it. Reopen instead of writing from stale history.
+    const stale = resolution.thread;
+    if (stale.running || stale.activeTurnId) return resolution;
+    await stale.session.close().catch((error: unknown) => this.#diagnose(error));
+    await stale.outputTask.catch(() => undefined);
+    this.#externalRuntime.remove(threadId);
     return this.#externalRuntime.resolve(threadId);
   }
 

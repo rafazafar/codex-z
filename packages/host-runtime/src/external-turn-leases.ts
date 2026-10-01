@@ -6,6 +6,13 @@
  */
 export class ExternalTurnLeases {
   readonly #holders = new Map<string, unknown>();
+  readonly #listeners = new Set<(threadId: string) => void>();
+
+  /** Notified after a lease is released. Returns an unsubscribe function. */
+  subscribe(listener: (threadId: string) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
 
   /** Returns false when another owner holds the lease. */
   acquire(threadId: string, owner: unknown): boolean {
@@ -16,7 +23,9 @@ export class ExternalTurnLeases {
   }
 
   release(threadId: string, owner: unknown): void {
-    if (this.#holders.get(threadId) === owner) this.#holders.delete(threadId);
+    if (this.#holders.get(threadId) !== owner) return;
+    this.#holders.delete(threadId);
+    for (const listener of [...this.#listeners]) listener(threadId);
   }
 
   heldByOther(threadId: string, owner: unknown): boolean {

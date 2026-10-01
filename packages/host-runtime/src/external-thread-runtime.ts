@@ -61,6 +61,8 @@ export interface ExternalThread {
   turns: JsonObject[];
   historyHydrated: boolean;
   running: boolean;
+  /** Restored while another Host session ran a Turn; its Harness handle may be stale. */
+  restoredWhileLeased: boolean;
   activeTurnId: HostTurnId | null;
   // Terminal Turn projected by this process that is still the latest Turn
   // attempt; any later start clears it. A read may report it when native
@@ -309,6 +311,7 @@ export class ExternalThreadRuntime {
       turns: input.turns,
       historyHydrated: true,
       running,
+      restoredWhileLeased: this.#externallyActive(input.record.hostThreadId),
       activeTurnId: null,
       latestUsage: input.session.initialUsage,
       usageTurnId: null,

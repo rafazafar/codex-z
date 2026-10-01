@@ -11,6 +11,7 @@ import {
   requestId,
   startPiThread,
   startPiTurn,
+  threadStatus,
   turnEvent,
   writeRequest,
 } from "./app-server-host-fixture.js";
@@ -68,11 +69,21 @@ describe("External Turn leases across Desktop connections", () => {
         error: { code: -32072, message: "External Thread already has an active Turn" },
       });
 
+      writeRequest(second.desktopInput, {
+        id: 13,
+        method: "codex-z/thread/model/select",
+        params: { threadId, model: { id: "pi-native" } },
+      });
+      await expect(
+        second.collector.waitFor((message) => requestId(message, 13)),
+      ).resolves.toMatchObject({ id: 13, error: { code: -32072 } });
+
       session.appendText("done");
       session.succeedTurn();
       await first.collector.waitFor((message) => turnEvent(message, "turn/completed", turnId));
       await first.running;
 
+      await second.collector.waitFor((message) => threadStatus(message, threadId, "idle"));
       expect(leases.acquire(threadId, {})).toBe(true);
     } finally {
       first.host.close();
