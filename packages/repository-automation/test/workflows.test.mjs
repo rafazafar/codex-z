@@ -37,12 +37,35 @@ describe("workflow and form contracts", () => {
     expect(workflow).toContain("name: Check Linux ARM64");
   });
 
-  it("cancels superseded runs on the same PR or branch", async () => {
+  it("cancels superseded PR runs without cancelling release checks", async () => {
     const workflow = await read(".github/workflows/ci.yml");
     expect(workflow).toContain(
-      "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+      "group: checks-${{ github.workflow }}-${{ inputs.commit_sha || github.event.pull_request.number || github.ref }}",
     );
-    expect(workflow).toContain("cancel-in-progress: true");
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+  });
+
+  it("runs CI only for PRs and as release checks for the fixed commit", async () => {
+    const ci = await read(".github/workflows/ci.yml");
+    expect(ci).toContain("  pull_request:");
+    expect(ci).toContain("  workflow_call:");
+    expect(ci).not.toMatch(/^ {2}push:/mu);
+    expect(ci.match(/ref: \$\{\{ inputs\.commit_sha \}\}/gu)).toHaveLength(2);
+    expect(ci).toContain("persist-credentials: false");
+    const release = await read(".github/workflows/release-packages.yml");
+    expect(release).toContain("    uses: ./.github/workflows/ci.yml");
+    expect(release).toContain("      commit_sha: ${{ needs.prepare.outputs.commit_sha }}");
+    const checks = release.slice(release.indexOf("  check:"), release.indexOf("  package:"));
+    expect(checks).toContain("needs: prepare");
+    const packages = release.slice(
+      release.indexOf("  package:"),
+      release.indexOf("  publish-npm:"),
+    );
+    expect(packages).toContain("needs: [prepare, check]");
+    expect(packages).toContain("Build and smoke-test Linux npm package");
+    expect(release).toContain("needs: [prepare, check, package, publish-npm]");
+    expect(ci).toContain("if: runner.os == 'Linux' && inputs.commit_sha == ''");
+    expect(ci).toContain("if: inputs.commit_sha == ''");
   });
 
   it("runs write-capable maintenance only with trusted code and no dependency installation", async () => {
@@ -68,6 +91,7 @@ describe("workflow and form contracts", () => {
     expect(workflow).toContain("if: github.event_name != 'workflow_dispatch' || !inputs.skip_npm");
     const publishRelease = workflow.slice(workflow.indexOf("  publish-release:"));
     expect(publishRelease).toContain("needs.prepare.result == 'success'");
+    expect(publishRelease).toContain("needs.check.result == 'success'");
     expect(publishRelease).toContain("needs.package.result == 'success'");
     expect(publishRelease).toContain("needs.publish-npm.result == 'success'");
     expect(publishRelease).toContain(
@@ -83,7 +107,7 @@ describe("workflow and form contracts", () => {
     ]) {
       const workflow = await read(file);
       for (const [, reference] of workflow.matchAll(/uses: (\S+)/gu))
-        expect(reference).toMatch(/@[a-f0-9]{40}$/u);
+        if (!reference.startsWith("./")) expect(reference).toMatch(/@[a-f0-9]{40}$/u);
     }
     const workflow = await read(".github/workflows/release-packages.yml");
     expect(workflow).not.toContain("ref: ${{ needs.prepare.outputs.tag }}");
@@ -95,7 +119,7 @@ describe("workflow and form contracts", () => {
     ).toHaveLength(2);
     expect(workflow.match(/await verifyRelease\(/gu)).toHaveLength(2);
     expect(workflow).toContain("release-evidence.json");
-    expect(workflow).toContain("timeout-minutes: 35");
-    expect(workflow).toContain("waitForCi: true");
+    expect(workflow).not.toContain("waitForCi");
+    expect(workflow).not.toContain("CI_RUN_ID");
   });
 });

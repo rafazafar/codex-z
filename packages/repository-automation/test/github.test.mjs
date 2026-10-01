@@ -26,15 +26,13 @@ describe("live CI evidence and target routing", () => {
       ci().run,
       ci({ id: 43, conclusion: "failure", created_at: "2026-09-10T12:00:00Z" }).run,
     ]);
-    const result = await readCi({ github, repo, sha: head, release: true });
+    const result = await readCi({ github, repo, sha: head });
     expect(result.run.id).toBe(43);
     expect(result.run.conclusion).toBe("failure");
     expect(github.rest.actions.listWorkflowRuns).toHaveBeenCalledWith(
       expect.objectContaining({
         workflow_id: 1,
         head_sha: head,
-        event: "push",
-        branch: "main",
         per_page: 100,
       }),
     );
@@ -43,15 +41,15 @@ describe("live CI evidence and target routing", () => {
     );
   });
 
-  it("does not use foreign workflows, fork pushes, another commit, or PR CI as release evidence", async () => {
+  it("does not use foreign workflows, fork pushes, another commit, or unsupported events as PR evidence", async () => {
     const invalid = [
       ci({ workflow_id: 99 }).run,
       ci({ head_repository: { full_name: "fork/codex-z" } }).run,
       ci({ head_sha: oldHead }).run,
-      ci({ event: "pull_request" }).run,
+      ci({ event: "workflow_dispatch" }).run,
     ];
     const github = githubFixture(invalid);
-    expect((await readCi({ github, repo, sha: head, release: true })).run).toBeUndefined();
+    expect((await readCi({ github, repo, sha: head })).run).toBeUndefined();
     expect(github.rest.actions.listJobsForWorkflowRun).not.toHaveBeenCalled();
   });
 
