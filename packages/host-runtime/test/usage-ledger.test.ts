@@ -100,6 +100,44 @@ describe("usage delta", () => {
 });
 
 describe("usage ledger summary", () => {
+  it.each(["codex", "claude-code", "pi"])(
+    "pairs output counts with positive Turn durations for %s",
+    (harnessId) => {
+      const records = [
+        turn({
+          turnId: "short",
+          completedAtMs: 11_000,
+          usage: { outputTokens: 100, inputTokens: 654_000 },
+        }),
+        turn({
+          turnId: "long",
+          completedAtMs: 31_000,
+          outcome: "interrupted",
+          usage: { outputTokens: 900 },
+        }),
+        turn({ turnId: "zero-output", completedAtMs: 11_000, usage: { outputTokens: 0 } }),
+        turn({ turnId: "missing-usage" }),
+        turn({ turnId: "input-only", usage: { inputTokens: 1_000 } }),
+        turn({ turnId: "total-only", usage: { totalTokens: 5_000 } }),
+        turn({ turnId: "zero-time", completedAtMs: 1_000, usage: { outputTokens: 5_000 } }),
+        turn({ turnId: "negative-time", completedAtMs: 500, usage: { outputTokens: 5_000 } }),
+      ].map((record) => ({ ...record, harnessId }));
+      const summary = summarizeUsageLedger(records, { harnessName: (id) => id });
+
+      expect(summary.models[0]).toMatchObject({
+        timedOutputTokens: 1_000,
+        outputTokenDurationMs: 50_000,
+        outputTokens: 11_000,
+      });
+
+      const filtered = summarizeUsageLedger(records, { sinceMs: 20_000, harnessName: (id) => id });
+      expect(filtered.models[0]).toMatchObject({
+        timedOutputTokens: 900,
+        outputTokenDurationMs: 30_000,
+      });
+    },
+  );
+
   it("groups by Harness and Model and separates user Turns from agent Turns", () => {
     const summary = summarizeUsageLedger(
       [

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatUsageCost,
+  formatUsageAverage,
   formatUsageCount,
   formatUsageDuration,
   formatUsagePercent,
@@ -28,6 +29,8 @@ function summary(overrides: Partial<UsageLedgerModelSummary>): UsageLedgerModelS
     inputTokens: 0,
     cachedInputTokens: 0,
     outputTokens: 0,
+    timedOutputTokens: 0,
+    outputTokenDurationMs: 0,
     reasoningOutputTokens: 0,
     totalTokens: 0,
     costSessions: 0,
@@ -73,7 +76,44 @@ describe("usage ledger metrics", () => {
     expect(row.costPerSession).toBeNull();
     expect(row.tokensPerSession).toBeNull();
     expect(row.turnsPerSession).toBeNull();
+    expect(row.avgTps).toBeNull();
     expect(formatUsageCost(row.costPerSession)).toBe("—");
+  });
+
+  it("uses output tokens and elapsed time from the same measured Turns", () => {
+    const row = usageLedgerRow(
+      summary({
+        totalTokens: 654_000,
+        outputTokens: 10_000,
+        durationMs: 100_000,
+        timedOutputTokens: 600,
+        outputTokenDurationMs: 40_000,
+      }),
+    );
+
+    expect(row.avgTps).toBe(15);
+    expect(formatUsageAverage(row.avgTps)).toBe("15.0");
+    expect(usageLedgerRow(summary({ outputTokenDurationMs: 5_000 })).avgTps).toBe(0);
+    expect(usageLedgerRow(summary({ timedOutputTokens: 50 })).avgTps).toBeNull();
+    expect(formatUsageAverage(null)).toBe("—");
+  });
+
+  it("sorts Avg TPS with missing measurements last in either direction", () => {
+    const rows = [
+      usageLedgerRow(summary({ modelId: "none" })),
+      usageLedgerRow(
+        summary({ modelId: "slow", timedOutputTokens: 5, outputTokenDurationMs: 1_000 }),
+      ),
+      usageLedgerRow(
+        summary({ modelId: "fast", timedOutputTokens: 15, outputTokenDurationMs: 1_000 }),
+      ),
+      usageLedgerRow(summary({ modelId: "zero", outputTokenDurationMs: 1_000 })),
+    ];
+    const order = (descending: boolean): string[] =>
+      sortUsageLedgerRows(rows, { column: "avgTps", descending }).map(({ model }) => model);
+
+    expect(order(true)).toEqual(["fast", "slow", "zero", "none"]);
+    expect(order(false)).toEqual(["zero", "slow", "fast", "none"]);
   });
 
   it("sorts by a metric with unreported rows last in either direction", () => {

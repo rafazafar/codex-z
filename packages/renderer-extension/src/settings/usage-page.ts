@@ -36,6 +36,7 @@ function cellText(row: UsageLedgerRow, column: Exclude<UsageLedgerColumn, "model
     const cost = formatUsageCost(row.costPerSession);
     return row.costEstimated && row.costPerSession !== null ? `~${cost}` : cost;
   }
+  if (column === "avgTps") return formatUsageAverage(row.avgTps);
   return formatUsageCount(row.tokensPerSession);
 }
 

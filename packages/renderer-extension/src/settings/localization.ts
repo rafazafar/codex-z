@@ -295,6 +295,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
       msPerSession: "Time / session",
       costPerSession: "Cost / session",
       tokensPerSession: "Tokens / session",
+      avgTps: "Avg TPS",
     },
     columnHelp: {
       model: "Model and the Harness it ran in",
@@ -305,6 +306,8 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
       msPerSession: "Time the Model spent working per Session",
       costPerSession: "Cost estimate per Session: the Harness's own, or API rates applied to tokens (~)",
       tokensPerSession: "Tokens per Session, as the Harness reports them",
+      avgTps:
+        "Average output tokens per second across measured Turns, including Tool calls and other waits.",
     },
     loading: "Loading usage…",
     empty:
@@ -614,6 +617,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
       msPerSession: "时间 / 会话",
       costPerSession: "费用 / 会话",
       tokensPerSession: "Token / 会话",
+      avgTps: "Avg TPS",
     },
     columnHelp: {
       model: "Model 及其所在的 Harness",
@@ -623,6 +627,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
       msPerSession: "每个会话中 Model 的工作时间",
       costPerSession: "每个会话的费用估算：Harness 自身上报，或按 API 价格根据 Token 估算（~）",
       tokensPerSession: "每个会话的 Token 数，按 Harness 上报的口径",
+      avgTps: "已测量 Turn 的平均每秒输出 Token 数，包含工具调用及其他等待时间。",
     },
     loading: "正在加载用量…",
     empty: "尚无 Turn 记录。记录从此版本开始，不包含更早的会话。",

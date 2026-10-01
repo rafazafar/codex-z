@@ -34,6 +34,10 @@ export const usageLedgerModelSummarySchema = z.strictObject({
   inputTokens: countSchema,
   cachedInputTokens: countSchema,
   outputTokens: countSchema,
+  /** Output tokens from Turns with a reported output count and positive elapsed time. */
+  timedOutputTokens: countSchema.default(0),
+  /** Elapsed time for the same Turns, including Tool calls and other waits. */
+  outputTokenDurationMs: countSchema.default(0),
   reasoningOutputTokens: countSchema,
   totalTokens: countSchema,
   costSessions: countSchema,

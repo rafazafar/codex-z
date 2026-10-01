@@ -38,6 +38,12 @@ Usage that arrives after a Turn has ended and is attributed to that Turn appends
 
 The settings page always reads the local Host, like Session Import.
 
+### Avg TPS
+
+Settings → Usage shows **Avg TPS**: total output tokens divided by total elapsed seconds for the same measured Turns. The summary returns these totals as `timedOutputTokens` and `outputTokenDurationMs`. Each Turn must have a reported output count and positive elapsed time. A reported zero output count is a valid measurement. Turns with missing output counts or zero or negative elapsed time are excluded from both totals.
+
+The rate includes Tool calls and other waits within a Turn. It is not a measure of generation speed alone. Input tokens, cached input tokens and separate reasoning token counts are not added to the output count. Each Harness defines its output count. The calculation uses the stored Turn records, so existing records need no migration. If no measurement is available, the page shows **—**. Older Hosts that omit the new summary fields also show **—**.
+
 ## Boundaries
 
 - Cost is the Harness's own estimate where it reports one. Native Codex reports tokens but no cost, so `usage-pricing.ts` prices those tokens at OpenAI's published standard API rates, keyed by exact Model id (cached input inside `inputTokens` at the cached rate). This is applied when the ledger is read, so a corrected price table also fixes history. Such cost is counted in `estimatedCostTurns` and shown with a leading `~`. Models without a known price show no cost. Long-context and Fast-tier surcharges are not applied, because a line holds a Turn's totals rather than its requests.

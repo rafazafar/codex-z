@@ -189,6 +189,8 @@ export function summarizeUsageLedger(
           inputTokens: 0,
           cachedInputTokens: 0,
           outputTokens: 0,
+          timedOutputTokens: 0,
+          outputTokenDurationMs: 0,
           reasoningOutputTokens: 0,
           totalTokens: 0,
           costSessions: 0,
@@ -213,10 +215,15 @@ export function summarizeUsageLedger(
     }
     if (record.outcome === "interrupted") summary.interruptedTurns += 1;
     if (record.outcome === "failed") summary.failedTurns += 1;
-    summary.durationMs += Math.max(0, record.completedAtMs - record.startedAtMs);
+    const durationMs = Math.max(0, record.completedAtMs - record.startedAtMs);
+    summary.durationMs += durationMs;
     summary.lastTurnAtMs = Math.max(summary.lastTurnAtMs, record.completedAtMs);
     const usage = record.usage;
     if (!usage) continue;
+    if (usage.outputTokens !== undefined && durationMs > 0) {
+      summary.timedOutputTokens += Math.round(usage.outputTokens);
+      summary.outputTokenDurationMs += durationMs;
+    }
     const tokens = turnTokens(usage);
     if (tokens !== null) {
       group.tokenSessions.add(record.threadId);

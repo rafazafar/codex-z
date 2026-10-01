@@ -8,11 +8,12 @@ export const USAGE_LEDGER_COLUMNS = [
   "msPerSession",
   "costPerSession",
   "tokensPerSession",
+  "avgTps",
 ] as const;
 export type UsageLedgerColumn = (typeof USAGE_LEDGER_COLUMNS)[number];
 export type UsageLedgerSort = { column: UsageLedgerColumn; descending: boolean };
 
-/** One Model's per-Session averages. A metric is null when nothing was reported for it. */
+/** One Model's averages. A metric is null when no measurement is available. */
 export interface UsageLedgerRow {
   readonly summary: UsageLedgerModelSummary;
   readonly model: string;
@@ -25,6 +26,7 @@ export interface UsageLedgerRow {
   /** Some of the cost was priced from tokens at API rates, not reported by the Harness. */
   readonly costEstimated: boolean;
   readonly tokensPerSession: number | null;
+  readonly avgTps: number | null;
 }
 
 function ratio(total: number, count: number): number | null {
@@ -64,6 +66,7 @@ export function usageLedgerRow(summary: UsageLedgerModelSummary): UsageLedgerRow
     costPerSession: ratio(summary.costUsd, summary.costSessions),
     costEstimated: summary.estimatedCostTurns > 0,
     tokensPerSession: ratio(summary.totalTokens, summary.tokenSessions),
+    avgTps: ratio(summary.timedOutputTokens, summary.outputTokenDurationMs / 1000),
   };
 }
 
