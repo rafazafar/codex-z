@@ -112,6 +112,7 @@ import {
   type ExternalThreadLocation,
   type ExternalThreadResolution,
 } from "./external-thread-runtime.js";
+import { ExternalTurnLeases } from "./external-turn-leases.js";
 import { ExternalSteerError, ExternalTurnSteering } from "./external-turn-steering.js";
 import {
   ExternalCommandError,
@@ -268,6 +269,8 @@ export interface AppServerHostOptions {
   onRequestRoute?: (observation: RequestRouteObservation) => void;
   updateCoordinator?: HostUpdateCoordinator;
   onDelegationApi?: (api: DelegationControlRegistration) => (() => void) | undefined;
+  /** Shared by all sessions of one Host so a reconnect sees Turns still running. */
+  externalTurnLeases?: ExternalTurnLeases;
 }
 
 interface TurnProjectionGate {
@@ -591,6 +594,7 @@ export class AppServerHost {
   #pluginLoading: Promise<void> | undefined;
   readonly #desktopRequests = new DesktopRequestQueue();
   #drainActiveWorkOnInputEnd = false;
+  readonly #turnLeases: ExternalTurnLeases;
   #desktopInputEnded = false;
 
   constructor(options: AppServerHostOptions) {
@@ -684,12 +688,14 @@ export class AppServerHost {
         throw new Error(`External Adapter '${harnessId}' has mismatched Harness ID`);
       }
     }
+    this.#turnLeases = options.externalTurnLeases ?? new ExternalTurnLeases();
     this.#externalRuntime = new ExternalThreadRuntime({
       adapters: this.#externalAdapters,
       environment: this.#options.environment ?? process.env,
       repository: this.#repository,
       consumeOutputs: (thread) => this.#consumeHarnessOutputs(thread),
       diagnose: (error) => this.#diagnose(error),
+      externallyActive: (threadId) => this.#turnLeases.heldByOther(threadId, this),
       subagentRunning: (threadId) => this.#subagentThreadStatuses.get(threadId) === "active",
       idleRelease: {
         queue: this.#desktopRequests,
@@ -774,9 +780,36 @@ export class AppServerHost {
     if (this.#closeRequested || this.#desktopInputEnded || this.#drainActiveWorkOnInputEnd) return;
     this.#drainActiveWorkOnInputEnd = true;
     this.#externalSteering.close();
+    // Bounded policy: nobody can answer after the transport is gone, so deny
+    // pending approvals and cancel pending questions instead of leaving the
+    // Turn blocked forever. Active Turns otherwise keep running.
+    void this.#rejectInteractionsAfterDisconnect().catch((error: unknown) => this.#diagnose(error));
     const desktopInput = this.#options.desktopInput as Readable & { end?: () => void };
     if (typeof desktopInput.end === "function") desktopInput.end();
     else desktopInput.destroy();
+  }
+
+  async #rejectInteractionsAfterDisconnect(): Promise<void> {
+    for (const pending of [...this.#pendingDesktopApprovals.values()]) {
+      await this.#denyApproval(pending.thread, pending.interaction);
+      await this.#resolveDesktopApproval(pending.interaction.interactionId).catch(() => undefined);
+    }
+    for (const requestId of [...this.#pendingDesktopQuestions.keys()]) {
+      await this.#cancelExpiredQuestion(requestId);
+    }
+  }
+
+  #claimTurnLease(thread: ExternalThread): boolean {
+    return this.#turnLeases.acquire(thread.id, this);
+  }
+
+  #syncTurnLeases(): void {
+    for (const id of this.#turnLeases.heldBy(this)) {
+      const thread = this.#externalRuntime.get(id);
+      if (!thread || (!thread.running && thread.activeTurnId === null)) {
+        this.#turnLeases.release(id, this);
+      }
+    }
   }
 
   #waitForPlugins(): Promise<void> {
@@ -920,6 +953,7 @@ export class AppServerHost {
   }
 
   #signalActiveWorkChanged(): void {
+    this.#syncTurnLeases();
     if (!this.#closeRequested && this.#hasActiveWork()) return;
     const waiters = [...this.#activeWorkDrainWaiters];
     this.#activeWorkDrainWaiters.clear();
@@ -2889,7 +2923,7 @@ export class AppServerHost {
     }
     // Admission belongs to the caller. A steering replacement retains its
     // reservation until this command starts, after the old Turn has stopped.
-    if (thread.running || thread.activeTurnId) {
+    if (thread.running || thread.activeTurnId || !this.#claimTurnLease(thread)) {
       throw new ExternalCommandError(-32072, "External Thread already has an active operation");
     }
     const turnId = requestedTurnId ?? hostTurnIdSchema.parse(randomUUID());
@@ -3725,7 +3759,11 @@ export class AppServerHost {
   }
 
   #externalThreadBusy(thread: ExternalThread): boolean {
-    return thread.running || this.#externalSteering.hasPending(thread.id);
+    return (
+      thread.running ||
+      this.#externalSteering.hasPending(thread.id) ||
+      this.#turnLeases.heldByOther(thread.id, this)
+    );
   }
 
   async #startDelegatedExternalTurn(
@@ -3736,6 +3774,7 @@ export class AppServerHost {
     if (this.#externalThreadBusy(thread)) {
       throw new Error("External Thread already has an active Turn");
     }
+    this.#claimTurnLease(thread);
     const turnId = hostTurnIdSchema.parse(requestedTurnId);
     const projection: ProjectedTurn = {
       projector: new CodexTurnProjector({
@@ -3898,7 +3937,8 @@ export class AppServerHost {
     if (
       thread.running ||
       thread.activeTurnId ||
-      this.#pendingExternalCommandRequests.has(thread.id)
+      this.#pendingExternalCommandRequests.has(thread.id) ||
+      !this.#claimTurnLease(thread)
     ) {
       throw new ExternalSteerError(-32072, "External Thread already has an active Turn");
     }
@@ -4136,7 +4176,7 @@ export class AppServerHost {
     }
 
     if (event.type === "turn.autonomous.started") {
-      if (thread.running || thread.activeTurnId) {
+      if (thread.running || thread.activeTurnId || !this.#claimTurnLease(thread)) {
         throw new Error("External autonomous Turn started while another Turn is active");
       }
       const projection: ProjectedTurn = {
@@ -4416,6 +4456,11 @@ export class AppServerHost {
       thread.ignoredInteractionIds.add(interaction.interactionId);
       const denied = await this.#denyApproval(thread, interaction);
       if (!denied) thread.ignoredInteractionIds.delete(interaction.interactionId);
+      return;
+    }
+    if (this.#drainActiveWorkOnInputEnd) {
+      // Desktop is gone; an unanswerable Approval would block the Turn forever.
+      await this.#denyApproval(thread, interaction);
       return;
     }
     for (const message of result.messages) await this.#writer.json(message);

@@ -200,6 +200,7 @@ export class ExternalThreadRuntime {
   readonly #repository: ExternalThreadRepository;
   readonly #restores = new Map<string, Promise<ExternalThread>>();
   readonly #subagentRunning: (threadId: string) => boolean;
+  readonly #externallyActive: (threadId: string) => boolean;
   readonly #threads = new Map<string, ExternalThread>();
 
   constructor(input: {
@@ -209,6 +210,8 @@ export class ExternalThreadRuntime {
     consumeOutputs(thread: ExternalThread): Promise<void>;
     diagnose(error: unknown): void;
     subagentRunning?(threadId: string): boolean;
+    /** True when another Host session still runs a Turn on this Thread. */
+    externallyActive?(threadId: string): boolean;
     idleRelease?: {
       queue: DesktopRequestQueue;
       canRelease(thread: ExternalThread): boolean;
@@ -221,6 +224,7 @@ export class ExternalThreadRuntime {
     this.#consumeOutputs = input.consumeOutputs;
     this.#diagnose = input.diagnose;
     this.#subagentRunning = input.subagentRunning ?? (() => false);
+    this.#externallyActive = input.externallyActive ?? (() => false);
     this.idleRelease = new ExternalThreadIdleRelease({
       threads: () => this.values(),
       get: (id) => this.get(id),
@@ -297,9 +301,10 @@ export class ExternalThreadRuntime {
       record: input.record,
       sessionId: input.sessionId,
       stateObserver: new SessionStateObserver(observerState),
-      thread: running
-        ? { ...input.thread, status: { type: "active", activeFlags: [] } }
-        : input.thread,
+      thread:
+        running || this.#externallyActive(input.record.hostThreadId)
+          ? { ...input.thread, status: { type: "active", activeFlags: [] } }
+          : input.thread,
       transportModelId: input.transportModelId ?? input.record.transportModelId,
       turns: input.turns,
       historyHydrated: true,
