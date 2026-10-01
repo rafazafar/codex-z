@@ -23,6 +23,7 @@ function subagentMaterializer(
   store: ExternalThreadStore,
   parent: StoredThreadRecordV1,
   previousParent?: StoredThreadRecordV1,
+  readOnly = false,
 ) {
   if (
     previousParent &&
@@ -119,12 +120,15 @@ function subagentMaterializer(
     }
     if (existing?.state === "ready") {
       if (existing.nativeSessionRef?.nativeSessionId === nativeRef.nativeSessionId) return existing;
+      if (readOnly) return null;
       if (!previousRef) throw new Error("Subagent belongs to a different Native Session");
       // Only children retained in a validated rollback Snapshot are rebound. Native
       // Session IDs remain part of ordinary lookup, so later reused IDs cannot
       // accidentally select children removed by a previous rollback.
       return rebind(existing, parent);
     }
+
+    if (readOnly) return null;
 
     // MappingStore atomically deduplicates overlapping live/history creation.
     const provisional =
@@ -167,8 +171,9 @@ export async function projectExternalSnapshot(
   record: StoredThreadRecordV1,
   snapshot: HostThreadSnapshot,
   previousParent?: StoredThreadRecordV1,
+  readOnly = false,
 ): Promise<JsonObject[]> {
-  const materialize = subagentMaterializer(store, record, previousParent);
+  const materialize = subagentMaterializer(store, record, previousParent, readOnly);
   const turns: JsonObject[] = [];
   for (const [index, turn] of snapshot.turns.entries()) {
     const mapping = record.turnMappings[index];

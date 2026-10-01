@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { FakeHarnessAdapter, FakeHarnessSession } from "@codex-z/harness-adapter/testing";
-import { harnessIdSchema, harnessPermissionModeCatalogSchema } from "@codex-z/shared-contracts";
+import {
+  harnessIdSchema,
+  harnessPermissionModeCatalogSchema,
+  hostThreadIdSchema,
+} from "@codex-z/shared-contracts";
 import { MappingStore } from "@codex-z/mapping-store";
 import type { JsonObject } from "@codex-z/protocol-core";
 
@@ -187,6 +191,107 @@ describe("External Turn leases across Desktop connections", () => {
       resumed.sessions[1]?.succeedTurn();
       await second.collector.waitFor((message) => turnEvent(message, "turn/completed", next));
     } finally {
+      first.host.close();
+      second?.host.close();
+      await first.running;
+      await second?.running;
+      await store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["restore", "refresh"])("does not reconcile history during leased %s", async (stage) => {
+    const leases = new ExternalTurnLeases();
+    const directory = mkdtempSync(path.join(tmpdir(), "codex-z-snapshot-lease-"));
+    const store = new MappingStore({ directory });
+    const first = createFixture({
+      mappingStore: store,
+      mappingStoreDirectory: directory,
+      closeMappingStoreOnExit: false,
+      externalTurnLeases: leases,
+    });
+    let second: ReturnType<typeof createFixture> | undefined;
+    const persistGate = Promise.withResolvers<undefined>();
+    try {
+      const threadId = await startPiThread(first);
+      const previousId = await startPiTurn(first, threadId);
+      const source = first.adapter.sessions[0];
+      if (!source) throw new Error("Fake Session was not opened");
+      source.succeedTurn();
+      await first.collector.waitFor((message) => turnEvent(message, "turn/completed", previousId));
+      const turnId = await startPiTurn(first, threadId, 3);
+      first.host.disconnect();
+      const resumed = independentAdapter(source);
+      second = createFixture({
+        mappingStore: store,
+        mappingStoreDirectory: directory,
+        closeMappingStoreOnExit: false,
+        externalTurnLeases: leases,
+        externalAdapters: new Map([["pi", resumed.adapter]]),
+      });
+      if (stage === "refresh") {
+        writeRequest(second.desktopInput, {
+          id: 50,
+          method: "thread/resume",
+          params: { threadId },
+        });
+        await second.collector.waitFor((message) => requestId(message, 50));
+        const session = resumed.sessions[0];
+        if (!session) throw new Error("Restored Session was not opened");
+        vi.spyOn(session, "readSnapshot").mockImplementation(async () => ({
+          ok: true,
+          value: source.persistedSnapshot(),
+        }));
+      }
+      const entered = Promise.withResolvers<undefined>();
+      const upsert = store.upsertTurnMappings.bind(store);
+      vi.spyOn(store, "upsertTurnMappings").mockImplementation(async (...args) => {
+        entered.resolve(undefined);
+        await persistGate.promise;
+        return upsert(...args);
+      });
+      const reconcile = vi.spyOn(store, "reconcileTurnMappings");
+      source.succeedTurn();
+      await entered.promise;
+      writeRequest(second.desktopInput, { id: 51, method: "thread/resume", params: { threadId } });
+      const busy = await second.collector.waitFor((message) => requestId(message, 51));
+      expect(busy).toMatchObject({
+        result: {
+          thread: {
+            status: { type: "active" },
+            turns: [{ id: previousId }],
+          },
+        },
+      });
+      expect(reconcile).not.toHaveBeenCalled();
+      expect(
+        (await store.getThread(hostThreadIdSchema.parse(threadId)))?.turnMappings.map(
+          (turn) => turn.hostTurnId,
+        ),
+      ).toEqual([previousId]);
+      persistGate.resolve(undefined);
+      const completed = await first.collector.waitFor((message) =>
+        turnEvent(message, "turn/completed", turnId),
+      );
+      expect(completed).toMatchObject({ params: { turn: { status: "completed" } } });
+      await first.running;
+      writeRequest(second.desktopInput, { id: 52, method: "thread/resume", params: { threadId } });
+      const idle = await second.collector.waitFor((message) => requestId(message, 52));
+      expect(idle).toMatchObject({
+        result: {
+          thread: {
+            status: { type: "idle" },
+            turns: [{ id: previousId }, { id: turnId }],
+          },
+        },
+      });
+      expect(
+        (await store.getThread(hostThreadIdSchema.parse(threadId)))?.turnMappings.map(
+          (turn) => turn.hostTurnId,
+        ),
+      ).toEqual([previousId, turnId]);
+    } finally {
+      persistGate.resolve(undefined);
       first.host.close();
       second?.host.close();
       await first.running;

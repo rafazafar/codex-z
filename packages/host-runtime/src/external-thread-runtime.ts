@@ -462,10 +462,14 @@ export class ExternalThreadRuntime {
   }
 
   async refresh(thread: ExternalThread): Promise<ExternalThreadRpcError | null> {
-    const snapshot = await thread.session.readSnapshot();
-    if (!snapshot.ok) return mapExternalThreadHarnessError(snapshot.error, "read");
+    const releaseLease = this.#acquireRestoreLease(thread.id);
+    const readOnly =
+      !releaseLease || this.#externallyActive(thread.id) || thread.restoredWhileLeased;
     try {
-      const aligned = await this.#repository.alignSnapshot(thread.record, snapshot.value);
+      const snapshot = await thread.session.readSnapshot();
+      if (!snapshot.ok) return mapExternalThreadHarnessError(snapshot.error, "read");
+      const record = (await this.#repository.find(thread.id)) ?? thread.record;
+      const aligned = await this.#repository.alignSnapshot(record, snapshot.value, { readOnly });
       thread.record = aligned.record;
       thread.turns = aligned.turns;
       thread.historyHydrated = true;
@@ -478,6 +482,8 @@ export class ExternalThreadRuntime {
       return null;
     } catch {
       return { code: -32081, message: "External Thread history could not be persisted" };
+    } finally {
+      releaseLease?.();
     }
   }
 
@@ -568,9 +574,9 @@ export class ExternalThreadRuntime {
     const releaseLease = this.#acquireRestoreLease(record.hostThreadId);
     try {
       return await this.#restoreNative(
-        record,
+        releaseLease ? ((await this.#repository.find(record.hostThreadId)) ?? record) : record,
         adapter,
-        this.#externallyActive(record.hostThreadId),
+        !releaseLease || this.#externallyActive(record.hostThreadId),
         this.#leaseVersion(record.hostThreadId),
       );
     } finally {
@@ -631,7 +637,9 @@ export class ExternalThreadRuntime {
       if (!snapshot.ok) {
         throw new ExternalThreadOpenError(mapExternalThreadHarnessError(snapshot.error, "read"));
       }
-      let aligned = await this.#repository.alignSnapshot(record, snapshot.value);
+      let aligned = await this.#repository.alignSnapshot(record, snapshot.value, {
+        readOnly: externallyActive,
+      });
       const restoredState = snapshot.value.state;
       const effectiveModel = restoredState
         ? restoredState.effectiveModel

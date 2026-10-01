@@ -38,7 +38,7 @@ A transport disconnect lets the active external Turn finish. The Host processes 
 
 Connections in the same remote Host share a Thread lease. A second connection can read the Thread and sees it as active. It cannot start another Turn, change Model, Thinking, or Permission Mode, or roll back history while the first connection owns the lease. Configuration and history changes hold the lease until the operation finishes.
 
-Recovery defers saved configuration while another connection owns the lease. After that lease is released, the second connection reports idle. Before its next Desktop operation, it closes the old Session handle and opens a new one to read the completed native history. This also applies when the first Turn finishes during recovery.
+Recovery defers saved configuration while another connection owns the lease. History reads show only Turns with committed Host IDs and do not update Turn or Subagent mappings until the lease is available. After that lease is released, the second connection reports idle. Before its next Desktop operation, it closes the old Session handle and opens a new one to read the completed native history. This also applies when the first Turn finishes during recovery.
 
 ## Commands
 

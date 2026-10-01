@@ -162,7 +162,16 @@ describe("ExternalThreadRepository", () => {
       },
     ];
     const snapshot = { turns: [turn] };
-    const first = await repository.alignSnapshot(parent, snapshot);
+    const committed = await repository.persistTurn(
+      parent,
+      hostTurnIdSchema.parse("host-spawn"),
+      turn.nativeTurnRef,
+    );
+    const readOnly = await repository.alignSnapshot(committed, snapshot, { readOnly: true });
+    expect(readOnly.turns).toHaveLength(1);
+    expect((await repository.list()).filter((entry) => entry.subagent)).toHaveLength(0);
+    expect(await repository.find(hostThreadId)).toEqual(committed);
+    const first = await repository.alignSnapshot(committed, snapshot);
     const child = (await repository.list()).find((entry) => entry.subagent);
     expect(child).toMatchObject({
       state: "ready",
@@ -179,6 +188,8 @@ describe("ExternalThreadRepository", () => {
         receiverThreadIds: [child?.hostThreadId],
       }),
     );
+    const known = await repository.alignSnapshot(first.record, snapshot, { readOnly: true });
+    expect(known.turns).toEqual(first.turns);
     await repository.close();
     const reopened = new ExternalThreadRepository(new MappingStore({ directory }));
     await reopened.initialize();
@@ -355,5 +366,40 @@ describe("ExternalThreadRepository", () => {
       aligned.record.turnMappings.map(({ hostTurnId }) => hostTurnId),
     );
     await repository.close();
+  });
+  it("does not replace committed mappings from a stale read-only snapshot", async () => {
+    const store = new MappingStore({ directory: await temporaryStoreDirectory() });
+    const repository = new ExternalThreadRepository(store);
+    await repository.initialize();
+    try {
+      await store.createProvisional({
+        hostThreadId,
+        createRequestId: "read-only",
+        harnessId,
+        cwd: "/synthetic",
+        transportModelId: "codex-z/claude-code-native",
+        ephemeral: false,
+        historyMode: "legacy",
+      });
+      const original = await store.commitReady({
+        hostThreadId,
+        nativeSessionRef,
+        turnMappings: [mapping("host-a", "native-a")],
+      });
+      const committed = await repository.persistTurn(
+        original,
+        hostTurnIdSchema.parse("host-b"),
+        snapshotTurn("native-b").nativeTurnRef,
+      );
+      const readOnly = await repository.alignSnapshot(
+        original,
+        { turns: [snapshotTurn("native-uncommitted"), snapshotTurn("native-a")] },
+        { readOnly: true },
+      );
+      expect(readOnly.turns.map((turn) => turn.id)).toEqual(["host-a"]);
+      expect(await repository.find(hostThreadId)).toEqual(committed);
+    } finally {
+      await repository.close();
+    }
   });
 });

@@ -412,6 +412,7 @@ export class ExternalThreadRepository {
   async alignSnapshot(
     record: StoredThreadRecordV1,
     snapshot: HostThreadSnapshot,
+    options: { readOnly?: boolean } = {},
   ): Promise<AlignedExternalSnapshot> {
     const nativeSessionRef = record.nativeSessionRef;
     if (!nativeSessionRef || record.state !== "ready") {
@@ -434,8 +435,10 @@ export class ExternalThreadRepository {
         (mapping) => [nativeTurnKey(mapping.nativeTurnRef), mapping] as const,
       ),
     );
-    const aligned = snapshot.turns.map((turn) => {
+    const aligned = snapshot.turns.flatMap((turn) => {
       const existing = mappingsByNative.get(nativeTurnKey(turn.nativeTurnRef));
+      // The active writer must assign the Host Turn ID. Do not expose a temporary ID.
+      if (options.readOnly && !existing) return [];
       const mapping =
         existing ??
         ({
@@ -443,14 +446,16 @@ export class ExternalThreadRepository {
           nativeTurnRef: turn.nativeTurnRef,
           ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
         } satisfies StoredTurnMappingV1);
-      return {
-        snapshot: turn,
-        mapping: {
-          ...mapping,
-          nativeTurnRef: turn.nativeTurnRef,
-          ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
+      return [
+        {
+          snapshot: turn,
+          mapping: {
+            ...mapping,
+            nativeTurnRef: turn.nativeTurnRef,
+            ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
+          },
         },
-      };
+      ];
     });
 
     const orderedMappings = aligned.map(({ mapping }) => mapping);
@@ -460,12 +465,19 @@ export class ExternalThreadRepository {
         const persisted = record.turnMappings[index];
         return !persisted || !sameMapping(mapping, persisted);
       });
-    const nextRecord = mappingsChanged
-      ? await this.store.reconcileTurnMappings(record.hostThreadId, orderedMappings)
-      : record;
+    const nextRecord =
+      mappingsChanged && !options.readOnly
+        ? await this.store.reconcileTurnMappings(record.hostThreadId, orderedMappings)
+        : record;
     return {
       record: nextRecord,
-      turns: await projectExternalSnapshot(this.store, nextRecord, snapshot),
+      turns: await projectExternalSnapshot(
+        this.store,
+        { ...nextRecord, turnMappings: orderedMappings },
+        { ...snapshot, turns: aligned.map(({ snapshot: turn }) => turn) },
+        undefined,
+        options.readOnly,
+      ),
     };
   }
 }
