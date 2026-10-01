@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { MappingStore } from "@codexhost/mapping-store";
-import type { JsonObject } from "@codexhost/protocol-core";
+import { MappingStore } from "@codex-z/mapping-store";
+import type { JsonObject } from "@codex-z/protocol-core";
 
 import { ExternalTurnLeases } from "../src/external-turn-leases.js";
 import {
