@@ -30,7 +30,6 @@ jobs:
   prepare:
     name: Resolve release metadata
     runs-on: ubuntu-latest
-    timeout-minutes: 35
     permissions:
       contents: read
       actions: read
@@ -42,8 +41,6 @@ jobs:
       commit_sha: ${{ steps.release.outputs.commit_sha }}
       tag_object_sha: ${{ steps.release.outputs.tag_object_sha }}
       automation_sha: ${{ steps.release.outputs.automation_sha }}
-      ci_run_id: ${{ steps.release.outputs.ci_run_id }}
-      ci_run_attempt: ${{ steps.release.outputs.ci_run_attempt }}
     steps:
       # Validation code is from the trusted default branch, not the requested tag.
       - name: Checkout trusted release automation
@@ -54,7 +51,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: packages/repository-automation
 
-      - name: Validate tag, version, release notes, and exact-commit CI
+      - name: Validate tag, version, and release notes
         id: release
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -65,23 +62,21 @@ jobs:
             const { pathToFileURL } = await import('node:url');
             const { resolve } = await import('node:path');
             const { writeFile } = await import('node:fs/promises');
-            const { resolveRelease } = await import(pathToFileURL(resolve('packages/repository-automation/index.mjs')).href);
-            const result = await resolveRelease({
-              github, repo: context.repo, root: process.cwd(),
+            const { readReleaseMetadata } = await import(pathToFileURL(resolve('packages/repository-automation/index.mjs')).href);
+            const result = await readReleaseMetadata({
+              root: process.cwd(),
               tag: process.env.SOURCE_TAG,
               expectedRefSha: context.eventName === 'push' ? context.payload.after : undefined,
-              waitForCi: true,
             });
             for (const [name, value] of Object.entries({
               tag: result.tag, version: result.version, prerelease: result.prerelease,
               npm_tag: result.npmTag, commit_sha: result.sha,
               tag_object_sha: result.tagObjectSha, automation_sha: result.automationSha,
-              ci_run_id: result.ciRunId, ci_run_attempt: result.ciRunAttempt,
             })) core.setOutput(name, value);
             await writeFile('release-notes.md', result.notes);
             const { notes, ...evidence } = result;
-            await writeFile('release-evidence.json', JSON.stringify(evidence, null, 2) + '\n');
-            await core.summary.addRaw(`Release ${result.tag}\n\nCommit: ${result.sha}\n\nCI: ${result.ciUrl} (attempt ${result.ciRunAttempt})\n`).write();
+            await writeFile('release-evidence.json', JSON.stringify({ ...evidence, releaseRunId: context.runId, releaseRunAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + '\n');
+            await core.summary.addRaw(`Release ${result.tag}\n\nCommit: ${result.sha}\n`).write();
 
       - name: Upload release notes and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -93,9 +88,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  check:
+    name: Check release commit
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      commit_sha: ${{ needs.prepare.outputs.commit_sha }}
+
   package:
     name: Build ${{ matrix.target }}
-    needs: prepare
+    needs: [prepare, check]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -241,14 +243,12 @@ jobs:
           path: build/npm-publish
           merge-multiple: true
 
-      - name: Revalidate tag and CI immediately before npm publication
+      - name: Revalidate tag and commit immediately before npm publication
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_SHA: ${{ needs.prepare.outputs.commit_sha }}
           TAG_OBJECT_SHA: ${{ needs.prepare.outputs.tag_object_sha }}
-          CI_RUN_ID: ${{ needs.prepare.outputs.ci_run_id }}
-          CI_RUN_ATTEMPT: ${{ needs.prepare.outputs.ci_run_attempt }}
         with:
           script: |
             const { pathToFileURL } = await import('node:url');
@@ -257,7 +257,6 @@ jobs:
             await verifyRelease({ github, repo: context.repo,
               tag: process.env.RELEASE_TAG, sha: process.env.RELEASE_SHA,
               tagObjectSha: process.env.TAG_OBJECT_SHA,
-              ciRunId: process.env.CI_RUN_ID, ciRunAttempt: process.env.CI_RUN_ATTEMPT,
             });
 
       - name: Publish platform packages and meta package
@@ -275,11 +274,12 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     if: >-
-      !cancelled() && needs.prepare.result == 'success' && needs.package.result == 'success' &&
+      !cancelled() && needs.prepare.result == 'success' && needs.check.result == 'success' &&
+      needs.package.result == 'success' &&
       needs.prepare.outputs.npm_tag != 'test' &&
       (needs.publish-npm.result == 'success' ||
       (github.event_name == 'workflow_dispatch' && inputs.skip_npm && needs.publish-npm.result == 'skipped'))
-    needs: [prepare, package, publish-npm]
+    needs: [prepare, check, package, publish-npm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -313,14 +313,12 @@ jobs:
           name: release-notes
           path: release-metadata
 
-      - name: Revalidate tag and CI immediately before GitHub publication
+      - name: Revalidate tag and commit immediately before GitHub publication
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_SHA: ${{ needs.prepare.outputs.commit_sha }}
           TAG_OBJECT_SHA: ${{ needs.prepare.outputs.tag_object_sha }}
-          CI_RUN_ID: ${{ needs.prepare.outputs.ci_run_id }}
-          CI_RUN_ATTEMPT: ${{ needs.prepare.outputs.ci_run_attempt }}
         with:
           script: |
             const { pathToFileURL } = await import('node:url');
@@ -329,7 +327,6 @@ jobs:
             await verifyRelease({ github, repo: context.repo,
               tag: process.env.RELEASE_TAG, sha: process.env.RELEASE_SHA,
               tagObjectSha: process.env.TAG_OBJECT_SHA,
-              ciRunId: process.env.CI_RUN_ID, ciRunAttempt: process.env.CI_RUN_ATTEMPT,
             });
 
       - name: Validate artifacts and publish the release

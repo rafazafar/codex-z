@@ -4,7 +4,7 @@ Private source ESM package without third-party runtime dependencies. Trusted Git
 
 - `runMaintenance` / `maintainItem`: label only explicit `fix:` / `feat:` / `docs:` PR titles. When current HEAD CI finishes, update one short result comment. For failure, include sanitized original log excerpts.
 - Do not process Issues, request template completion, summarize reviews, check specification risks, or send long-wait reminders.
-- `readReleaseMetadata` / `resolveRelease` / `verifyRelease`: keep release version, tag, commit, and CI evidence consistent.
+- `readReleaseMetadata` / `verifyRelease`: validate the release version, annotated tag, and fixed commit. The release workflow runs the shared checks for that commit and requires success before packaging and publication.
 - `validateReleaseVersion`: shared version validator for release preparation scripts.
 
 Maintenance entries write by default. Callers must explicitly use `dryRun: true` for read-only previews. The manual GitHub entry defaults to preview. Automation does not call models, execute PR code, merge, or publish automatically.

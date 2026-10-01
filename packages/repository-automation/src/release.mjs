@@ -1,18 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { CI_JOBS, SHA } from "./policy.mjs";
-import { readCi } from "./github.mjs";
+import { SHA } from "./policy.mjs";
 
 const execFileAsync = promisify(execFile);
 const semverPattern =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-const RELEASE_CI_WAIT_TIMEOUT_MS = 30 * 60 * 1000;
-const RELEASE_CI_POLL_INTERVAL_MS = 10 * 1000;
-
-function sleep(delay) {
-  return new Promise((resolve) => setTimeout(resolve, delay));
-}
-
 export function validateReleaseVersion(version) {
   if (typeof version !== "string" || !semverPattern.test(version)) {
     throw new Error(`release version '${version}' must be valid semver`);
@@ -92,75 +84,7 @@ export async function readReleaseMetadata({ root, tag, expectedRefSha }) {
   };
 }
 
-export function assertReleaseCi({ run, jobs }, sha) {
-  if (!run || run.head_sha !== sha || run.event !== "push" || run.head_branch !== "main") {
-    throw new Error("release requires CI evidence from a main push at the exact release commit");
-  }
-  if (run.status !== "completed" || run.conclusion !== "success") {
-    throw new Error(`release CI is not successful: ${run.conclusion ?? run.status}`);
-  }
-  for (const name of CI_JOBS) {
-    const matches = jobs.filter((job) => job.name === name);
-    if (
-      matches.length !== 1 ||
-      matches[0].status !== "completed" ||
-      matches[0].conclusion !== "success"
-    ) {
-      throw new Error(`release CI is missing a successful job: ${name}`);
-    }
-  }
-  return { ciRunId: run.id, ciRunAttempt: run.run_attempt, ciUrl: run.html_url };
-}
-
-export async function waitForReleaseCi({
-  github,
-  repo,
-  sha,
-  timeoutMs = RELEASE_CI_WAIT_TIMEOUT_MS,
-  pollIntervalMs = RELEASE_CI_POLL_INTERVAL_MS,
-  now = Date.now,
-  sleepFor = sleep,
-  read = readCi,
-}) {
-  const deadline = now() + timeoutMs;
-  for (;;) {
-    const ci = await read({ github, repo, sha, release: true });
-    if (ci.run?.status === "completed") return assertReleaseCi(ci, sha);
-    const remaining = deadline - now();
-    if (remaining <= 0) {
-      throw new Error(`timed out waiting for release CI at the exact release commit: ${sha}`);
-    }
-    await sleepFor(Math.min(pollIntervalMs, remaining));
-  }
-}
-
-export async function resolveRelease({
-  github,
-  repo,
-  root,
-  tag,
-  expectedRefSha,
-  waitForCi = false,
-}) {
-  const metadata = await readReleaseMetadata({ root, tag, expectedRefSha });
-  const evidence = waitForCi
-    ? await waitForReleaseCi({ github, repo, sha: metadata.sha })
-    : assertReleaseCi(
-        await readCi({ github, repo, sha: metadata.sha, release: true }),
-        metadata.sha,
-      );
-  return { ...metadata, ...evidence };
-}
-
-export async function verifyRelease({
-  github,
-  repo,
-  tag,
-  sha,
-  tagObjectSha,
-  ciRunId,
-  ciRunAttempt,
-}) {
+export async function verifyRelease({ github, repo, tag, sha, tagObjectSha }) {
   validateReleaseVersion(tag?.startsWith("v") ? tag.slice(1) : "");
   if (!SHA.test(sha) || !SHA.test(tagObjectSha))
     throw new Error("release verification requires full SHAs");
@@ -178,15 +102,4 @@ export async function verifyRelease({
   ) {
     throw new Error("release commit is no longer on main");
   }
-  const ci = await readCi({ github, repo, sha, release: true });
-  const evidence = assertReleaseCi(ci, sha);
-  if (
-    String(evidence.ciRunId) !== String(ciRunId) ||
-    String(evidence.ciRunAttempt) !== String(ciRunAttempt)
-  ) {
-    throw new Error(
-      "release CI run or attempt changed after preparation; restart the release to bind fresh evidence",
-    );
-  }
-  return evidence;
 }

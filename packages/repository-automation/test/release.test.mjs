@@ -4,14 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  assertReleaseCi,
-  readReleaseMetadata,
-  resolveRelease,
-  verifyRelease,
-  waitForReleaseCi,
-} from "../index.mjs";
-import { ci, head, oldHead, repo } from "./fixtures.mjs";
+import { readReleaseMetadata, verifyRelease } from "../index.mjs";
+import { head, oldHead, repo } from "./fixtures.mjs";
 
 const exec = promisify(execFile);
 const roots = [];
@@ -72,15 +66,8 @@ async function repository({
 }
 
 function githubFixture(sha = head) {
-  const state = ci({ head_sha: sha });
   return {
-    paginate: vi.fn(async (method, args) => (await method(args)).data),
     rest: {
-      actions: {
-        getWorkflow: vi.fn(async () => ({ data: { id: 1, path: ".github/workflows/ci.yml" } })),
-        listWorkflowRuns: vi.fn(async () => ({ data: [state.run] })),
-        listJobsForWorkflowRun: vi.fn(async () => ({ data: state.jobs })),
-      },
       git: { getRef: vi.fn(async () => ({ data: { object: { type: "tag", sha: oldHead } } })) },
       repos: {
         compareCommits: vi.fn(async () => ({
@@ -166,100 +153,72 @@ describe("release source and metadata", () => {
   });
 });
 
-describe("exact-commit CI release gate", () => {
-  it("requires all four successful jobs for the exact main-push commit", () => {
-    expect(assertReleaseCi(ci(), head)).toMatchObject({ ciRunId: 42, ciRunAttempt: 1 });
-    expect(() => assertReleaseCi(ci(), oldHead)).toThrow("exact release commit");
-    expect(() => assertReleaseCi(ci({ event: "pull_request" }), head)).toThrow("main push");
-    expect(() => assertReleaseCi({ jobs: [] }, head)).toThrow("evidence");
+describe("release publication source validation", () => {
+  const input = () => ({
+    github: githubFixture(),
+    repo,
+    tag: "v1.2.3",
+    sha: head,
+    tagObjectSha: oldHead,
   });
 
-  it.each(["failure", "cancelled", "skipped", "action_required", "timed_out", null])(
-    "rejects %s CI even if an older run was green",
-    (conclusion) => {
-      expect(() => assertReleaseCi(ci({ conclusion }), head)).toThrow("not successful");
+  it("checks the remote source without requiring a separate main CI run", async () => {
+    const f = input();
+    await expect(verifyRelease(f)).resolves.toBeUndefined();
+    expect(f.github.rest.git.getRef).toHaveBeenCalledWith({ ...repo, ref: "tags/v1.2.3" });
+    expect(f.github.rest.repos.compareCommits).toHaveBeenCalledWith({
+      ...repo,
+      base: head,
+      head: "main",
+    });
+  });
+
+  it.each(["ahead", "identical"])("accepts a release commit still on main (%s)", async (status) => {
+    const f = input();
+    f.github.rest.repos.compareCommits.mockResolvedValue({
+      data: { status, merge_base_commit: { sha: head } },
+    });
+    await expect(verifyRelease(f)).resolves.toBeUndefined();
+  });
+
+  it.each(["diverged", "behind"])(
+    "rejects publication when main no longer contains the commit (%s)",
+    async (status) => {
+      const f = input();
+      f.github.rest.repos.compareCommits.mockResolvedValue({
+        data: { status, merge_base_commit: { sha: oldHead } },
+      });
+      await expect(verifyRelease(f)).rejects.toThrow("no longer on main");
     },
   );
 
-  it("rejects queued, missing, skipped and duplicate jobs rather than accepting a green workflow", () => {
-    expect(() => assertReleaseCi(ci({ status: "queued" }), head)).toThrow("not successful");
-    for (const jobs of [
-      [],
-      ci().jobs.slice(1),
-      [...ci().jobs, ci().jobs[0]],
-      ci().jobs.map((job, index) => (index ? job : { ...job, conclusion: "skipped" })),
-    ]) {
-      expect(() => assertReleaseCi({ ...ci(), jobs }, head)).toThrow("successful job");
-    }
-  });
-
-  it("waits for the exact main CI run to complete after a tag push", async () => {
-    const read = vi
-      .fn()
-      .mockResolvedValueOnce(ci({ status: "in_progress", conclusion: null }))
-      .mockResolvedValueOnce(ci());
-    const sleepFor = vi.fn(async () => {});
-    await expect(
-      waitForReleaseCi({ github: {}, repo, sha: head, read, sleepFor, now: () => 0 }),
-    ).resolves.toMatchObject({ ciRunId: 42, ciRunAttempt: 1 });
-    expect(sleepFor).toHaveBeenCalledOnce();
-  });
-
-  it("times out when the matching CI run does not become available", async () => {
-    const now = vi.fn().mockReturnValueOnce(0).mockReturnValue(100);
-    await expect(
-      waitForReleaseCi({
-        github: {},
-        repo,
-        sha: head,
-        timeoutMs: 100,
-        now,
-        read: async () => ({ jobs: [] }),
-      }),
-    ).rejects.toThrow("timed out waiting for release CI");
-  });
-
-  it("combines trusted metadata with exact-head CI provenance", async () => {
-    const f = await repository();
-    const result = await resolveRelease({ ...f, repo, github: githubFixture(f.sha) });
-    expect(result).toMatchObject({ sha: f.sha, ciRunId: 42, ciRunAttempt: 1 });
-  });
-
-  it("rejects publication if main was rewritten to remove the prepared commit", async () => {
-    const github = githubFixture();
-    github.rest.repos.compareCommits.mockResolvedValue({
-      data: { status: "diverged", merge_base_commit: { sha: oldHead } },
+  it("rejects a different merge base even when comparison reports ahead", async () => {
+    const f = input();
+    f.github.rest.repos.compareCommits.mockResolvedValue({
+      data: { status: "ahead", merge_base_commit: { sha: oldHead } },
     });
-    await expect(
-      verifyRelease({
-        github,
-        repo,
-        tag: "v1.2.3",
-        sha: head,
-        tagObjectSha: oldHead,
-        ciRunId: 42,
-        ciRunAttempt: 1,
-      }),
-    ).rejects.toThrow("no longer on main");
+    await expect(verifyRelease(f)).rejects.toThrow("no longer on main");
   });
 
-  it("revalidates the remote annotated tag and bound CI attempt before publication", async () => {
-    const github = githubFixture();
-    const input = {
-      github,
-      repo,
-      tag: "v1.2.3",
-      sha: head,
-      tagObjectSha: oldHead,
-      ciRunId: 42,
-      ciRunAttempt: 1,
-    };
-    expect(await verifyRelease(input)).toMatchObject({ ciRunId: 42 });
-    await expect(verifyRelease({ ...input, tagObjectSha: head })).rejects.toThrow("tag changed");
-    await expect(verifyRelease({ ...input, ciRunAttempt: 2 })).rejects.toThrow("attempt changed");
-    github.rest.actions.listWorkflowRuns.mockResolvedValue({
-      data: [ci({ conclusion: "failure" }).run],
+  it("rejects a moved or replaced annotated tag", async () => {
+    const f = input();
+    await expect(verifyRelease({ ...f, tagObjectSha: head })).rejects.toThrow("tag changed");
+    f.github.rest.git.getRef.mockResolvedValue({
+      data: { object: { type: "commit", sha: oldHead } },
     });
-    await expect(verifyRelease(input)).rejects.toThrow("not successful");
+    await expect(verifyRelease(f)).rejects.toThrow("tag changed");
+  });
+
+  it("rejects malformed source identifiers before remote requests", async () => {
+    const f = input();
+    await expect(verifyRelease({ ...f, sha: "short" })).rejects.toThrow("full SHAs");
+    await expect(verifyRelease({ ...f, tag: "vbad" })).rejects.toThrow("valid semver");
+    expect(f.github.rest.git.getRef).not.toHaveBeenCalled();
+  });
+
+  it("propagates API failures before publication", async () => {
+    const f = input();
+    f.github.rest.git.getRef.mockRejectedValue(new Error("unavailable"));
+    await expect(verifyRelease(f)).rejects.toThrow("unavailable");
   });
 });

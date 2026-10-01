@@ -56,7 +56,7 @@ Entry point: `.github/workflows/repository-maintenance.yml`. Logic belongs to `p
 
 ## CI execution scope and release validation
 
-`ci.yml` retains the four baseline jobs and does not configure branch protection. To reduce duplicate work, checks run as follows:
+`ci.yml` runs on PRs and provides reusable checks for `Release packages`. Pushes to `main` do not start a separate CI run. The release workflow checks the fixed tagged commit before it builds or publishes packages. The four baseline jobs remain; these workflows do not configure branch protection. Checks run as follows:
 
 | Check | Linux x64 | macOS / Windows / Linux ARM64 |
 | --- | --- | --- |
@@ -64,7 +64,7 @@ Entry point: `.github/workflows/repository-maintenance.yml`. Logic belongs to `p
 | TypeScript build and preinstalled plugin build | Run | Run |
 | TypeScript tests | All | All except the Linux-x64-only tests below |
 | Rust Clippy, build, and tests | Run | Run |
-| Linux npm installation-package smoke | Run | Run on ARM64; not applicable to macOS / Windows |
+| Linux npm installation-package smoke | Run for PRs; run in packaging for releases | Same on ARM64; not applicable to macOS / Windows |
 
 These tests run only on Linux x64 and are not repeated on the other three platforms:
 
@@ -75,9 +75,9 @@ These tests run only on Linux x64 and are not repeated on the other three platfo
 
 All other tests retain cross-platform regressions for filesystems, processes, paths, locks, SQLite, plugin loading, and release artifacts. Linux ARM64 installation-package smoke does not replace those tests. TypeScript builds on each platform still check production-code types. Rust formatting runs once in Linux x64 `format:check`; every platform retains full Clippy and Rust tests.
 
-CI uses fresh runners and does not persist Cargo `target`, so `CARGO_INCREMENTAL=0` disables incremental state for reuse across builds. Cargo can still reuse unchanged dependency artifacts within the same job. `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0` disable Rust dev/test debug symbols to reduce compilation, linking, and artifact costs. Default debug assertions and overflow checks remain enabled, but stack traces contain less source-location information. Local Cargo configuration and release profiles are unchanged, as is the release workflow. Pinned npm installation and `npm ci` use `--prefer-offline` to prefer cached data and still fetch missing data online. Lockfile constraints and dependency audit remain enabled.
+Checks use `CARGO_INCREMENTAL=0` to disable incremental state. Cargo can reuse unchanged dependencies within a job, and the Rust cache restores compiled dependencies between runs. Only release checks save the cache; PRs can read it. `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0` disable Rust dev/test debug symbols. Debug assertions and overflow checks remain enabled, but stack traces contain less source-location information. Local Cargo configuration and release profiles are unchanged. Pinned npm installation and `npm ci` use `--prefer-offline` to prefer cached data and still fetch missing data. Lockfile constraints and dependency audit remain enabled.
 
-New commits cancel old CI for the same PR. Each `main push` has a separate concurrency group and is not cancelled by later commits, so success evidence for an exact release SHA is retained. Tests are not retried and timeouts are not relaxed globally.
+New commits cancel old CI for the same PR. Release checks use a separate concurrency group and do not cancel a release in progress. Tests are not retried and timeouts are not relaxed globally. TypeScript tests require a TypeScript build; Rust tests require compilation. Release binaries and installers still require separate packaging builds. Linux package smoke tests run once during release packaging instead of also running in the release check jobs.
 
 Local `npm run check` and `npm run check:rust` remain unchanged and are not affected by the reduced CI scope. Reproduce the CI TypeScript scope with:
 
@@ -98,9 +98,9 @@ Release validation in `release-packages.yml` remains separate from PR comments:
 
 1. The tag must be a valid SemVer annotated tag with Release Notes in its body. Its commit must be in `main` history.
 2. Root versions in `package.json` and `package-lock.json`, plus the Cargo workspace version, must match the tag.
-3. The main repository's `main push` CI and all four baseline jobs must succeed for the exact release SHA.
-4. Build and publish a fixed commit SHA. Before publication, revalidate the remote tag object SHA, commit membership in `main`, CI run ID/attempt, and result.
-5. Stop publication if validation fails. Do not change versions automatically, wait and retry, or relax conditions. Maintainers must investigate and prepare the release again manually.
+3. Call the reusable checks with the resolved release commit SHA. All four baseline jobs must succeed in the release run before packaging starts. No previous PR or `main push` CI run is required.
+4. Build and publish the fixed commit SHA. Job dependencies require successful release checks and package builds. Before npm and GitHub publication, revalidate the remote annotated tag object SHA and commit membership in `main`. Release evidence records the source metadata and release run ID/attempt.
+5. Stop publication if validation fails. Do not change versions automatically or relax conditions. Maintainers must investigate and prepare the release again manually.
 
 macOS release builds support Apple Silicon (`arm64`) only. The release workflow does not build or publish macOS x64 installers or npm packages.
 
@@ -122,9 +122,9 @@ After the packages exist, configure a GitHub Actions trusted publisher in **each
 | Environment name | Leave empty; this workflow does not use a GitHub environment |
 | Allowed actions | Permit direct `npm publish` |
 
-Enter only the workflow filename. The workflow uses GitHub-hosted runners and npm `11.8.0`, which supports trusted publishing. After a successful OIDC release, remove the repository's `NPM_TOKEN` secret and revoke the token. See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/). Authentication does not bypass the tag, version, exact-commit CI, or pre-publication checks above.
+Enter only the workflow filename. The workflow uses GitHub-hosted runners and npm `11.8.0`, which supports trusted publishing. After a successful OIDC release, remove the repository's `NPM_TOKEN` secret and revoke the token. See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/). Authentication does not bypass the tag, version, release checks for the fixed commit, or pre-publication checks above.
 
-If npm publication is blocked, run `Release packages` manually from the default branch, specify the original annotated tag, and enable `skip_npm`. This mode skips npm publication but builds installation packages from the tag's fixed commit. It retains all version, tag, and exact-commit CI checks and publishes only the GitHub Release after they pass. Tags do not need to move or be recreated. Default publication still requires npm publication to succeed.
+If npm publication is blocked, run `Release packages` manually from the default branch, specify the original annotated tag, and enable `skip_npm`. This mode skips npm publication but builds installation packages from the tag's fixed commit. It retains version and tag validation, runs the shared checks for the fixed commit, and publishes only the GitHub Release after they pass. Tags do not need to move or be recreated. Default publication still requires npm publication to succeed.
 
 Tag pushes use the workflow definition in the tagged commit. New validation does not rewrite release logic for old tags. This is not an unbypassable permission control; branch, tag, and release-environment protection are not configured.
 

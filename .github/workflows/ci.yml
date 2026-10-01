@@ -2,9 +2,12 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: "Fixed release commit to check; empty for PR checkout"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,12 +18,10 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
 
-# A newer push to the same PR or branch supersedes the run in progress.
-# Release validation needs green CI for the exact tagged commit, so a commit
-# whose run was cancelled must be re-run before it can be tagged.
+# A new PR commit supersedes the previous run. Release checks use a distinct group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: checks-${{ github.workflow }}-${{ inputs.commit_sha || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -35,10 +36,13 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
           cache: npm
@@ -47,15 +51,15 @@ jobs:
         run: npm install --global --prefer-offline npm@11.8.0
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: 1.97.1
 
-      # Reuse compiled dependencies; only main refreshes the cache so PRs cannot evict it.
+      # Reuse compiled dependencies; only release checks refresh the cache.
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ inputs.commit_sha != '' }}
 
       - name: Install dependencies
         run: npm ci --prefer-offline
@@ -98,7 +102,7 @@ jobs:
           -- -D warnings && npm run test:rust
 
       - name: Smoke-test Linux npm package
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && inputs.commit_sha == ''
         run: >
           node scripts/release/smoke-npm-package.mjs
           --target linux-x64
@@ -109,10 +113,13 @@ jobs:
     runs-on: ubuntu-22.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
           cache: npm
@@ -121,15 +128,15 @@ jobs:
         run: npm install --global --prefer-offline npm@11.8.0
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: 1.97.1
 
-      # Reuse compiled dependencies; only main refreshes the cache so PRs cannot evict it.
+      # Reuse compiled dependencies; only release checks refresh the cache.
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ inputs.commit_sha != '' }}
 
       - name: Install dependencies
         run: npm ci --prefer-offline
@@ -150,6 +157,7 @@ jobs:
           -- -D warnings && npm run test:rust
 
       - name: Smoke-test Linux ARM64 npm package
+        if: inputs.commit_sha == ''
         run: >
           node scripts/release/smoke-npm-package.mjs
           --target linux-arm64
