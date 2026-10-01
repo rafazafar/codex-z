@@ -1,3 +1,4 @@
+import { ExternalTurnLeases } from "./external-turn-leases.js";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { homedir } from "node:os";
@@ -195,8 +196,10 @@ export async function runHostRuntime(input: {
             closeMappingStoreOnExit: false,
             ...(updateCoordinator ? { updateCoordinator } : {}),
           };
+          const externalTurnLeases = new ExternalTurnLeases();
           const host = new AppServerHost({
             ...common,
+            externalTurnLeases,
             arguments: input.arguments,
             onDelegationApi,
           });
@@ -206,6 +209,7 @@ export async function runHostRuntime(input: {
             createSession: ({ input: desktopInput, output: desktopOutput, diagnosticOutput }) =>
               new AppServerHost({
                 ...common,
+                externalTurnLeases,
                 arguments: [],
                 desktopInput,
                 desktopOutput,
@@ -265,6 +269,7 @@ export async function runHostRuntime(input: {
       }));
       const mappingStore = createProductionExternalThreadStore(delegationEnvironment);
       await mappingStore.initialize();
+      const externalTurnLeases = new ExternalTurnLeases();
       const listener = createRemoteAppServerWebSocketListener({
         socketPath,
         diagnosticOutput: process.stderr,
@@ -279,6 +284,7 @@ export async function runHostRuntime(input: {
             diagnosticOutput,
             ...installedHarnessPluginOptions(delegationEnvironment, true, input.hostRuntimeUrl),
             mappingStore,
+            externalTurnLeases,
             closeMappingStoreOnExit: false,
             officialRuntimeScope,
             accountControl,

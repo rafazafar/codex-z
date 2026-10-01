@@ -1,3 +1,4 @@
+import type { ExternalTurnLeases } from "../src/external-turn-leases.js";
 import type { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -270,6 +271,7 @@ export function createFixture(
     accountControl?: CodexAccountControl;
     officialRuntimeScope?: OfficialRuntimeScope;
     onDelegationApi?: (api: DelegationControlRegistration) => (() => void) | undefined;
+    externalTurnLeases?: ExternalTurnLeases;
   } = {},
 ) {
   const adapter =
@@ -324,6 +326,7 @@ export function createFixture(
     ...(options.accountControl ? { accountControl: options.accountControl } : {}),
     ...(options.officialRuntimeScope ? { officialRuntimeScope: options.officialRuntimeScope } : {}),
     ...(options.onDelegationApi ? { onDelegationApi: options.onDelegationApi } : {}),
+    ...(options.externalTurnLeases ? { externalTurnLeases: options.externalTurnLeases } : {}),
   });
   const running = host.run();
   void running.then(
