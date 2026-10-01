@@ -37,7 +37,6 @@ describe("npm registry publishing", () => {
     const version = "0.1.0-test.1";
     const names = [
       `codex-z-cli-${version}-macos-arm64.tgz`,
-      `codex-z-cli-${version}-macos-x64.tgz`,
       `codex-z-cli-${version}-windows-x64.tgz`,
       `codex-z-cli-${version}-windows-arm64.tgz`,
       `codex-z-cli-${version}-linux-x64.tgz`,
@@ -50,7 +49,6 @@ describe("npm registry publishing", () => {
       const plan = await createNpmPublishPlan({ artifactsRoot: root, version });
       expect(plan.map((entry) => entry.packageName)).toEqual([
         "@codex-z/cli-darwin-arm64",
-        "@codex-z/cli-darwin-x64",
         "@codex-z/cli-win32-x64",
         "@codex-z/cli-win32-arm64",
         "@codex-z/cli-linux-x64",

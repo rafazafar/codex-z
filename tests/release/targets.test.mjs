@@ -11,14 +11,7 @@ import {
   supportedReleaseTargets,
 } from "../../scripts/release/targets.mjs";
 
-const expectedTargets = [
-  "macos-arm64",
-  "macos-x64",
-  "windows-x64",
-  "windows-arm64",
-  "linux-x64",
-  "linux-arm64",
-];
+const expectedTargets = ["macos-arm64", "windows-x64", "windows-arm64", "linux-x64", "linux-arm64"];
 
 describe("release targets", () => {
   it("defines the complete release target matrix", () => {
@@ -29,7 +22,6 @@ describe("release targets", () => {
     expect(NODE_VERSION).toBe("24.13.1");
     expect(Object.values(RELEASE_TARGETS).map((target) => target.rustTarget)).toEqual([
       "aarch64-apple-darwin",
-      "x86_64-apple-darwin",
       "x86_64-pc-windows-msvc",
       "aarch64-pc-windows-msvc",
       "x86_64-unknown-linux-gnu",
@@ -37,7 +29,6 @@ describe("release targets", () => {
     ]);
     expect(Object.values(RELEASE_TARGETS).map((target) => target.installerArchitecture)).toEqual([
       "arm64",
-      "x64",
       "x64",
       "arm64",
       undefined,
@@ -56,6 +47,10 @@ describe("release targets", () => {
   });
 
   it("rejects unknown and cross-operating-system targets", () => {
+    expect(() => releaseTarget("macos-x64")).toThrow("unknown release target");
+    expect(() => parseReleaseArguments(["--target", "macos-x64"], "darwin")).toThrow(
+      "has no installer",
+    );
     expect(() => releaseTarget("freebsd-x64")).toThrow("expected one of");
     expect(() => releaseTargetForHost("windows-x64", "darwin")).toThrow(
       "requires host platform 'win32'",
