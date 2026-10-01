@@ -15,10 +15,12 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
 
-# Superseded PR runs are disposable; main runs provide per-commit release evidence.
+# A newer push to the same PR or branch supersedes the run in progress.
+# Release validation needs green CI for the exact tagged commit, so a commit
+# whose run was cancelled must be re-run before it can be tagged.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
