@@ -37,12 +37,12 @@ describe("workflow and form contracts", () => {
     expect(workflow).toContain("name: Check Linux ARM64");
   });
 
-  it("cancels superseded PR runs without cancelling main release evidence", async () => {
+  it("cancels superseded runs on the same PR or branch", async () => {
     const workflow = await read(".github/workflows/ci.yml");
     expect(workflow).toContain(
-      "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
+      "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
     );
-    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+    expect(workflow).toContain("cancel-in-progress: true");
   });
 
   it("runs write-capable maintenance only with trusted code and no dependency installation", async () => {

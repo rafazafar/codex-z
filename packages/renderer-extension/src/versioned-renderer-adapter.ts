@@ -969,7 +969,8 @@ export function installCurrentRendererAdapter(): {
     selectThreadPermissionMode: (input: ThreadPermissionModeSelectParams) =>
       currentModelClient().selectThreadPermissionMode(input),
     checkUpdate: () => currentModelClient().checkUpdate(),
-    startUpdate: (options) => currentModelClient().startUpdate(options),
+    startUpdate: (...args: Parameters<RendererModelClient["startUpdate"]>) =>
+      currentModelClient().startUpdate(...args),
     readUpdateStatus: () => currentModelClient().readUpdateStatus(),
     inspectCodexAccountUsage: (
       input: Parameters<NonNullable<RendererModelClient["inspectCodexAccountUsage"]>>[0],

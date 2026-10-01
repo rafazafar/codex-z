@@ -3538,6 +3538,10 @@ describe("Claude Code HarnessAdapter", () => {
       },
     });
     expect(await nextEvent(iterator)).toMatchObject({
+      type: "session.state.changed",
+      state: { resolvedModelLabel: "claude-sonnet-4-6" },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
       type: "session.usage.changed",
       usage: { cacheHitRatePercent: 70, inputTokens: 100, outputTokens: 5 },
     });
@@ -3589,6 +3593,10 @@ describe("Claude Code HarnessAdapter", () => {
       type: "message.completed",
       messageId: "assistant-1",
       lastRequestUsage: request,
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: "session.state.changed",
+      state: { resolvedModelLabel: "claude-sonnet-4-6" },
     });
     const estimate = await nextEvent(iterator);
     expect(estimate).toMatchObject({
@@ -3855,6 +3863,10 @@ describe("Claude Code HarnessAdapter", () => {
         },
       });
       await vi.advanceTimersByTimeAsync(100);
+      expect(await nextEvent(iterator)).toMatchObject({
+        type: "session.state.changed",
+        state: { resolvedModelLabel: "claude-sonnet-4-6" },
+      });
       expect(await nextEvent(iterator)).toMatchObject({
         type: "session.usage.changed",
         usage: { cacheHitRatePercent: 70, inputTokens: 100, outputTokens: 2 },
