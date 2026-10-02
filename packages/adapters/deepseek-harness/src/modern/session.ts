@@ -309,6 +309,7 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
   readonly goals: HarnessGoalCapability;
   #nativeGoalActive = false;
   #goalOperation: Promise<void> = Promise.resolve();
+  readonly #refreshGoal: () => Promise<HarnessResult<HarnessGoal | null>>;
   #goalCommandTask: Promise<void> | undefined;
   #goalCommandError: HarnessError | undefined;
   readonly commands: HarnessCommandCapability;
@@ -476,6 +477,10 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
       this.#goalOperation = operation.then(() => undefined);
       return operation;
     };
+    this.#refreshGoal = () =>
+      goalResult(async () =>
+        projectDeepSeekGoal(await readDeepSeekGoal(this.#remote, this.#sessionId)),
+      );
     this.goals = {
       read: () =>
         goalResult(async () => {
@@ -1546,7 +1551,7 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
     this.#events.push(event);
     if (event.type === "goal/change") {
       // Durable events trigger a fresh read; process-local activation is not in the journal.
-      void this.goals.read();
+      void this.#refreshGoal();
     }
     this.#historyBytes += bytes;
     this.#receive(event);

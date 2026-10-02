@@ -2342,6 +2342,19 @@ describe("native goal SDK integration", () => {
         message: { model: "<synthetic>", content: [{ type: "text", text: "Goal set: ship" }] },
       } as unknown as SDKMessage);
       expect(await read).toMatchObject({ objective: "ship", status: "active" });
+      fakeQuery.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "goal-background",
+      } as unknown as SDKMessage);
+      await vi.waitFor(() => expect(transport.canPauseGoal()).toBe(false));
+      fakeQuery.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "goal-background",
+        status: "completed",
+      } as unknown as SDKMessage);
+      await vi.waitFor(() => expect(transport.canPauseGoal()).toBe(true));
       await transport.abort();
       expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
       expect(await transport.readGoal()).toMatchObject({ objective: "ship", status: "paused" });
@@ -2362,4 +2375,30 @@ describe("native goal SDK integration", () => {
       await transport.close();
     }
   });
+});
+
+it("reports native autonomous work before it reaches the Adapter", async () => {
+  const { transport, fakeQuery } = fixture();
+  const autonomous: ClaudeAutonomousTurn[] = [];
+  transport.setAutonomousTurnHandler((turn) => autonomous.push(turn));
+  await transport.start();
+  try {
+    expect(transport.isBusy()).toBe(false);
+    fakeQuery.push({
+      type: "user",
+      uuid: "00000000-0000-4000-8000-000000000199",
+      origin: { kind: "task-notification" },
+      message: { role: "user", content: "native worker input" },
+    } as unknown as SDKMessage);
+    pushPartialText(fakeQuery, "native output", "00000000-0000-4000-8000-000000000198");
+    await vi.waitFor(() => expect(transport.isBusy()).toBe(true));
+    await expect(
+      transport.runTurn("new input", "00000000-0000-4000-8000-000000000197", vi.fn()),
+    ).rejects.toThrow("busy");
+    completeTurn(fakeQuery);
+    await vi.waitFor(() => expect(autonomous).toHaveLength(1));
+    expect(transport.isBusy()).toBe(false);
+  } finally {
+    await transport.close();
+  }
 });

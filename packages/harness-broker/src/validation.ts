@@ -12,7 +12,13 @@ import {
   nativeSessionRefSchema,
   nativeTurnRefSchema,
 } from "@codex-z/shared-contracts";
-import type { HarnessError, HarnessOutput, HarnessSessionState } from "@codex-z/harness-adapter";
+import type {
+  HarnessError,
+  HarnessGoal,
+  HarnessGoalUpdate,
+  HarnessOutput,
+  HarnessSessionState,
+} from "@codex-z/harness-adapter";
 
 const cwdSchema = z.string().min(1).max(16_384);
 // A remote caller may propagate only the Host's scoped delegation context,
@@ -144,9 +150,64 @@ export const brokerCommandInvocationSchema = z
   })
   .strict();
 
+const goalStatusSchema = z.enum([
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "budgetLimited",
+  "complete",
+]);
+export const brokerGoalSchema = z
+  .object({
+    objective: z.string().min(1).max(4_000_000),
+    status: goalStatusSchema,
+    createdAt: z.number().finite().nonnegative(),
+    updatedAt: z.number().finite().nonnegative(),
+    tokenBudget: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+    tokensUsed: z.number().finite().nonnegative().optional(),
+    timeUsedSeconds: z.number().finite().nonnegative().optional(),
+  })
+  .strict()
+  .transform((goal): HarnessGoal => ({
+    objective: goal.objective,
+    status: goal.status,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+    ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
+    ...(goal.tokensUsed !== undefined ? { tokensUsed: goal.tokensUsed } : {}),
+    ...(goal.timeUsedSeconds !== undefined ? { timeUsedSeconds: goal.timeUsedSeconds } : {}),
+  }));
+const brokerGoalUpdateSchema = z
+  .discriminatedUnion("type", [
+    z.object({ type: z.literal("clear") }).strict(),
+    z
+      .object({
+        type: z.literal("set"),
+        objective: z.string().min(1).max(4_000_000).optional(),
+        status: goalStatusSchema.optional(),
+        tokenBudget: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+      })
+      .strict(),
+  ])
+  .transform((update): HarnessGoalUpdate =>
+    update.type === "clear"
+      ? update
+      : {
+          type: "set",
+          ...(update.objective !== undefined ? { objective: update.objective } : {}),
+          ...(update.status !== undefined ? { status: update.status } : {}),
+          ...(update.tokenBudget !== undefined ? { tokenBudget: update.tokenBudget } : {}),
+        },
+  );
+
 export const sessionParamsSchema = z
   .object({ sessionId: z.string().uuid(), sessionGeneration: z.number().int().positive() })
   .strict();
+
+export const sessionGoalUpdateParamsSchema = sessionParamsSchema.extend({
+  update: brokerGoalUpdateSchema,
+});
 
 export const sessionExecuteParamsSchema = sessionParamsSchema.extend({
   command: brokerHostCommandSchema,
@@ -214,6 +275,7 @@ export const harnessSessionStateSchema = z.custom<HarnessSessionState>((value) =
 });
 
 const eventKeys = new Map<string, ReadonlySet<string>>([
+  ["goal.changed", new Set(["type", "goal"])],
   ["session.state.changed", new Set(["type", "state"])],
   ["session.usage.changed", new Set(["type", "usage", "observedForTurnId"])],
   ["subagent.state.changed", new Set(["type", "nativeSubagentId", "status", "resultSummary"])],
@@ -267,6 +329,8 @@ export const harnessOutputSchema = z.custom<HarnessOutput>((value) => {
     if (Object.keys(output).some((key) => key !== "kind" && key !== "event")) return false;
     const event = output.event as Record<string, unknown> | undefined;
     if (!strictKeys(event, eventKeys.get(String(event?.type)))) return false;
+    if (event.type === "goal.changed")
+      return brokerGoalSchema.nullable().safeParse(event.goal).success;
     if (event.type === "session.state.changed")
       return harnessSessionStateSchema.safeParse(event.state).success;
     if (event.type === "session.faulted") return harnessErrorSchema.safeParse(event.error).success;

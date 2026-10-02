@@ -42,6 +42,8 @@ The Host routes `thread/goal/get`, `thread/goal/set`, and `thread/goal/clear` fo
 - `prepare`: validate a requested change and select its native command. Do not mutate state.
 - Optional `control`: use native controls without command admission. Publish any native Turns which the operation starts.
 
+The macOS Broker forwards the optional goal operations, native errors, goal events, and durable command acknowledgement. Session metadata advertises this capability. Older Brokers omit it and remain unsupported; the Host does not bypass them. The wire extension retains protocol version 1. The new client sends goal methods only after capability discovery. Use the client and Broker from the same release when the Broker exposes goals; older clients do not validate goal events.
+
 The Adapter publishes `goal.changed`. The Host projects the Desktop `thread/goal/updated` or `thread/goal/cleared` notification. Notifications have no inferred Turn association. Goal responses precede their goal notifications. Command Turn projection stays gated until the response is written.
 
 Set and clear requests retain the operation lease until native confirmation. An active goal retains the writer lease and prevents idle Session release between worker Turns. A paused or removed goal allows release after other work ends. When the output channel faults or ends, the Host discards its current goal observation; it does not publish a false clear or infer native completion. Native stop failures remain Adapter errors. Closing a DeepSeek Session with a known active goal first pauses native continuation, then stops any worker.
@@ -65,7 +67,7 @@ Claude pause cannot stop a retained background-completion segment through the he
 
 The Claude observer accepts native `active_goal` records and synthetic `local_command_run.command === "goal"` receipts. Model text such as “Goal set” cannot confirm a command. Trust and Hook policy rejection are returned as errors. The public SDK message union does not include every internal goal message; the observer validates those records before use. Native trust, permissions, evaluation, and persistence remain native responsibilities. See the [Claude goal reference](https://code.claude.com/docs/en/goal).
 
-DeepSeek preserves the distinction between durable phase and process-local activation. An active but disarmed native goal is shown as paused. Controls use native compare-and-set references. A stale mutation is not retried. Reads and controls are serialized in the Adapter so an earlier read cannot overwrite a later control result. Native evaluation, scheduling, round limits, and durable changes remain in the native Goal service. See the [native Goal subsystem](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/docs/subsystems/goal.md).
+DeepSeek preserves the distinction between durable phase and process-local activation. An active but disarmed native goal is shown as paused. Controls use native compare-and-set references and a fresh confirmation read. Resume requires the same native goal to be active or already complete. A stale mutation is not retried. Background notification reads cannot consume a command failure before its caller reads it. Reads and controls are serialized in the Adapter so an earlier read cannot overwrite a later control result. Native evaluation, scheduling, round limits, and durable changes remain in the native Goal service. See the [native Goal subsystem](https://github.com/deepseek-ai/deepseek-harness/blob/639ed015397290b3745d163aafe02ffee4aa3f84/docs/subsystems/goal.md).
 
 `/goal` is the canonical command in both catalogs. DeepSeek retains `/dsh-goal` as a compatibility alias. The global live-command exclusion for `goal` remains in place. Only a reviewed Adapter command can bypass it. Existing Antigravity command handling is unchanged.
 
@@ -109,7 +111,7 @@ Primary evidence for the matrix:
 
 ## Validation boundary
 
-Focused tests cover native receipt validation, trust rejection, retained-hook resume, clear-after-stop order, cancellation timeout, native CAS controls, state parsing, Desktop response order, unsupported plugins, and active-goal lease and idle-release behavior. Existing command, steering, official routing, and Session tests provide regression coverage.
+Focused tests cover native receipt validation, trust rejection, retained-hook resume, clear-after-stop order, cancellation timeout, native CAS controls, state parsing, Desktop response order, unsupported plugins, and active-goal lease and idle-release behavior. Broker forwarding, installed plugin catalogs, command admission during buffered native work, steering, official routing, and Session tests provide regression coverage.
 
 A live Claude command metadata check confirmed `/goal`. A live `/goal clear` check confirmed a synthetic native acknowledgement and the persisted caller-assigned message ID. The mapped SDK transport was also checked with the model-free clear operation.
 

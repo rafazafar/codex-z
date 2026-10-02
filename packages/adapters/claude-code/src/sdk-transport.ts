@@ -520,6 +520,16 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
     return this.#goals.read();
   }
 
+  isBusy(): boolean {
+    return Boolean(
+      this.#active || this.#autonomous?.nativeTurnKey || this.#autonomous?.events.length,
+    );
+  }
+
+  canPauseGoal(): boolean {
+    return this.#backgroundTasks.size === 0;
+  }
+
   slashCommands(): ClaudeSlashCommandSnapshot | null {
     if (!this.#started || this.#slashCommands === null) return null;
     return { commands: this.#slashCommands, skillNames: this.#skillNames };
@@ -607,8 +617,7 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
     if (this.#closePromise || !this.#started || !this.#query) {
       return Promise.reject(new Error("Claude SDK transport is not started"));
     }
-    if (this.#active || this.#autonomous?.nativeTurnKey || this.#autonomous?.events.length)
-      return Promise.reject(new Error("Claude SDK transport is busy"));
+    if (this.isBusy()) return Promise.reject(new Error("Claude SDK transport is busy"));
     const promise = new Promise<ClaudeTransportTurnResult>((resolve, reject) => {
       this.#active = {
         accumulator: new ClaudeNativeTurnAccumulator(

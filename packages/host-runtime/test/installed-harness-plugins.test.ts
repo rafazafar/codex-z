@@ -103,8 +103,8 @@ describe("installed Harness composition", () => {
       workbuddy: ["/compact", "/init"],
       "cursor-cli": ["/copy-request-id"],
       pi: ["/compact"],
-      "claude-code": ["/compact", "/init", "/recap"],
-      "deepseek-harness": ["/compact", "/dsh-goal", "/plan"],
+      "claude-code": ["/goal", "/compact", "/init", "/recap"],
+      "deepseek-harness": ["/compact", "/goal", "/dsh-goal", "/plan"],
       opencode: ["/compact"],
       grok: ["/compact"],
       omp: ["/compact"],
@@ -194,6 +194,7 @@ describe("installed Harness composition", () => {
       const adapter = [...registry.adapters].find(([id]) => id === "claude-code")?.[1];
       expect(adapter?.constructor.name).toBe("BrokeredHarnessAdapter");
       expect(adapter?.commandCatalog?.commands.map(({ invocation }) => invocation)).toEqual([
+        "/goal",
         "/compact",
         "/init",
         "/recap",

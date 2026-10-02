@@ -4751,6 +4751,51 @@ describe("DeepSeek native goal lifecycle integration", () => {
     });
     await test.session.close();
   });
+  it("retains a failed command when a native goal notification reads current state", async () => {
+    const execution = deferred<ModernRemoteResult<unknown>>();
+    const test = setup([
+      () => execution.promise,
+      () => ({ ok: true, value: { ...native, activation: "disarmed" } }),
+      () => ({ ok: true, value: { ...native, activation: "disarmed" } }),
+    ]);
+    await test.session.commands.execute({
+      turnId: turnId("failed-goal"),
+      commandId: "dsh.goal",
+      arguments: { text: "ship" },
+    });
+    execution.resolve({
+      ok: true,
+      value: { commandId: "native-goal", result: { kind: "error", text: "Native goal denied" } },
+    });
+    await vi.waitFor(() => expect(test.remote.calls).toHaveLength(1));
+    // Let the command terminal store its error before the notification arrives.
+    const outputs = test.session.outputs[Symbol.asyncIterator]();
+    for (;;) {
+      const output = await nextEvent(outputs);
+      if (output.type === "turn.completed") break;
+    }
+    test.feed.push(
+      event(0, "goal/change", {
+        kind: "goal/change",
+        version: 1,
+        operation: "pause",
+        goal: native,
+        roundsStarted: 1,
+        createdAt: 1000,
+        updatedAt: 2000,
+      }),
+    );
+    await vi.waitFor(() => expect(test.remote.calls).toHaveLength(2));
+    expect(await test.session.goals.read()).toMatchObject({
+      ok: false,
+      error: { message: "Native goal denied" },
+    });
+    expect(await test.session.goals.read()).toMatchObject({
+      ok: true,
+      value: { status: "paused" },
+    });
+    await test.session.close();
+  });
   it("pauses native goals during a worker Turn without cancelling that Turn", async () => {
     const paused = { ...native, phase: "paused", activation: "disarmed", revision: 2 };
     const test = setup(

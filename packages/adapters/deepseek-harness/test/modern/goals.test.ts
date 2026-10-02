@@ -99,3 +99,22 @@ it("does not confirm pause when native state has become active again", async () 
   ).rejects.toThrow("before control confirmation");
   expect(call).toHaveBeenCalledTimes(3);
 });
+
+it.each([
+  null,
+  { ...native, phase: "paused" },
+  { ...native, activation: "disarmed" },
+  { ...native, id: "other" },
+])("rejects unconfirmed resume state %j", async (observed) => {
+  const call = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: true, value: { ...native, phase: "paused" } })
+    .mockResolvedValueOnce({ ok: true, value: null })
+    .mockResolvedValueOnce({ ok: true, value: observed });
+  await expect(
+    controlDeepSeekGoal({ call } as unknown as ModernCommandRemote, "session", {
+      type: "set",
+      status: "active",
+    }),
+  ).rejects.toThrow("before control confirmation");
+});

@@ -182,6 +182,9 @@ export interface ClaudeIdleTurnHandler {
 export interface ClaudeTurnTransport {
   readonly sessionId: string;
   readGoal?(): Promise<HarnessGoal | null>;
+  canPauseGoal?(): boolean;
+  /** Includes native autonomous work that has not reached Adapter projection. */
+  isBusy?(): boolean;
   setAutonomousTurnHandler(handler: (turn: ClaudeAutonomousTurn) => void): void;
   setIdleTurnHandler(handler: ClaudeIdleTurnHandler | null): void;
   /**

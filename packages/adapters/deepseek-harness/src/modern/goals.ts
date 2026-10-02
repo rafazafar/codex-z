@@ -165,10 +165,13 @@ export async function controlDeepSeekGoal(
   });
   if (!result.ok)
     throw new Error("DeepSeek Harness rejected native goal control; its state may have changed");
-  const confirmed = projectDeepSeekGoal(await readDeepSeekGoal(remote, agentId));
+  const observed = await readDeepSeekGoal(remote, agentId);
+  const confirmed = projectDeepSeekGoal(observed);
   if (
     (method === "clear" && confirmed !== null) ||
-    (method === "pause" && confirmed?.status === "active")
+    (method !== "clear" && observed?.id !== current.id) ||
+    (method === "pause" && confirmed?.status === "active") ||
+    (method === "resume" && confirmed?.status !== "active" && confirmed?.status !== "complete")
   )
     throw new DeepSeekGoalError("invalidState", "Native goal changed before control confirmation");
   return confirmed;

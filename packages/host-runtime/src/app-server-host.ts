@@ -3145,7 +3145,11 @@ export class AppServerHost {
         commandId,
         ...(arguments_ ? { arguments: arguments_ } : {}),
       });
-      if (!result.ok) throw new ExternalCommandError(-32073, result.error.message);
+      if (!result.ok)
+        throw new ExternalCommandError(
+          result.error.code === "sessionBusy" ? -32072 : -32073,
+          result.error.message,
+        );
       if (result.value.persistTurn) thread.ephemeralTurnIds.delete(turnId);
       return { turnId: result.value.turnId, turn: projection.projector.pendingTurn(), gate };
     } catch (error) {
@@ -4231,7 +4235,11 @@ export class AppServerHost {
         turnId,
         input: [{ type: "text", text: rewriteDelegationMentionText(text) }],
       });
-      if (!result.ok) throw new ExternalSteerError(-32073, result.error.message);
+      if (!result.ok)
+        throw new ExternalSteerError(
+          result.error.code === "sessionBusy" ? -32072 : -32073,
+          result.error.message,
+        );
       return { turnId, turn: projection.projector.pendingTurn(), gate };
     } catch (error) {
       thread.running = false;
@@ -4331,9 +4339,9 @@ export class AppServerHost {
     if (event.type === "goal.changed") {
       await this.#pendingExternalGoalResponses.get(thread.id)?.promise;
       if (this.#externalRuntime.get(thread.id) !== thread) return;
-      thread.goal = event.goal;
       if (event.goal?.status === "active" && !this.#claimTurnLease(thread))
         throw new Error("Another Host owns the active native goal");
+      thread.goal = event.goal;
       this.#signalActiveWorkChanged();
       await this.#writer.json(
         event.goal

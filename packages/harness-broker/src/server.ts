@@ -33,6 +33,7 @@ import {
   brokerInspectInputSchema,
   brokerOpenInputSchema,
   sessionCommandExecuteParamsSchema,
+  sessionGoalUpdateParamsSchema,
   sessionExecuteParamsSchema,
   sessionParamsSchema,
   subagentReadSnapshotSchema,
@@ -187,6 +188,9 @@ function sessionMetadata(record: ServerSession): object {
     },
     initialUsage: record.session.initialUsage,
     commands: record.session.commands !== undefined,
+    ...(record.session.goals
+      ? { goals: { control: record.session.goals.control !== undefined } }
+      : {}),
   };
 }
 
@@ -712,6 +716,35 @@ export async function startHarnessBrokerServer(input: {
               ...(command.arguments ? { arguments: command.arguments } : {}),
             })
           : { ok: false, error: harnessError("Commands unavailable", false) };
+      }
+      if (request.method === "session.goals.read") {
+        const goals = requireSession(request.params).session.goals;
+        return goals
+          ? goals.read()
+          : {
+              ok: false,
+              error: { code: "unsupported", message: "Native goals unavailable", retryable: false },
+            };
+      }
+      if (
+        request.method === "session.goals.prepare" ||
+        request.method === "session.goals.control"
+      ) {
+        const parsed = sessionGoalUpdateParamsSchema.parse(request.params);
+        const goals = requireSession(parsed).session.goals;
+        const control = goals?.control;
+        if (!goals || (request.method === "session.goals.control" && !control))
+          return {
+            ok: false,
+            error: {
+              code: "unsupported",
+              message: "Native goal operation unavailable",
+              retryable: false,
+            },
+          };
+        return request.method === "session.goals.prepare"
+          ? goals.prepare(parsed.update)
+          : control?.(parsed.update);
       }
       if (request.method === "session.reopen") {
         const record = requireSession(request.params);

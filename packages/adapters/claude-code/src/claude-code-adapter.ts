@@ -673,7 +673,10 @@ class ClaudeHarnessSession implements HarnessSession {
             this.#active
               ? {
                   turnId: this.#active.command.turnId,
-                  held: this.#active.held,
+                  held:
+                    this.#active.held ||
+                    this.#occupancy.unsettled ||
+                    this.#transport?.canPauseGoal?.() === false,
                   completion: this.#active.completion,
                 }
               : null,
@@ -687,7 +690,8 @@ class ClaudeHarnessSession implements HarnessSession {
             !this.#active &&
             !this.#acceptingTurn &&
             !this.#configurationTask &&
-            !this.#readingHistory,
+            !this.#readingHistory &&
+            !this.#transport?.isBusy?.(),
           timeoutMs: this.#closeTimeoutMs,
           start: async (text, clear) => {
             if (clear) {
@@ -934,6 +938,16 @@ class ClaudeHarnessSession implements HarnessSession {
       return { ok: false, error: invalidState("Claude Code Session closed during startup") };
     }
     if (startingTransport) this.#publishState();
+    if (transport.isBusy?.()) {
+      return {
+        ok: false,
+        error: {
+          code: "sessionBusy",
+          message: "Claude Code has native work in progress",
+          retryable: true,
+        },
+      };
+    }
     this.#usageGeneration += 1;
     this.#contextUsageFreshUntilMs = 0;
     this.#contextUsageCooldownUntilMs = 0;
@@ -1068,6 +1082,17 @@ class ClaudeHarnessSession implements HarnessSession {
     if (this.#phase !== "open") {
       return { ok: false, error: invalidState("Claude Code Session closed during startup") };
     }
+    if (startingTransport) this.#publishState();
+    if (transport.isBusy?.()) {
+      return {
+        ok: false,
+        error: {
+          code: "sessionBusy",
+          message: "Claude Code has native work in progress",
+          retryable: true,
+        },
+      };
+    }
     if (
       command.commandId === "claude.goal" &&
       !transport.slashCommands?.()?.commands.some((entry) => entry.name === "goal")
@@ -1088,7 +1113,6 @@ class ClaudeHarnessSession implements HarnessSession {
       });
       return accepted.ok ? { ok: true, value: { ...accepted.value, persistTurn: true } } : accepted;
     }
-    if (startingTransport) this.#publishState();
     this.#usageGeneration += 1;
     this.#contextUsageFreshUntilMs = 0;
     this.#contextUsageCooldownUntilMs = 0;
