@@ -12,10 +12,12 @@ export { sanitizeDiagnosticTail, filterAmbientNodeWarnings } from "./diagnostics
 export { validateHostQuestionResponse } from "./question.js";
 export { parseHostUsage } from "./usage.js";
 export type { HostUsage } from "./usage.js";
+export type { HarnessGoal, HarnessGoalUpdate, HarnessGoalCapability } from "./goals.js";
 export type {
   AutonomousTurnStartedEvent,
   CreateSessionInput,
   ForkSessionInput,
+  GoalChangedEvent,
   HarnessAdapter,
   HarnessCommandAccepted,
   HarnessCommandCapability,

@@ -2866,7 +2866,14 @@ describe("DeepSeek Harness Modern Session", () => {
 
     await expect(test.session.commands.list()).resolves.toMatchObject({
       ok: true,
-      value: { commands: [{ id: "dsh.compact" }, { id: "dsh.goal" }, { id: "dsh.plan" }] },
+      value: {
+        commands: [
+          { id: "dsh.compact" },
+          { id: "dsh.goal" },
+          { id: "dsh.goal.legacy" },
+          { id: "dsh.plan" },
+        ],
+      },
     });
     expect(test.remote.calls.map(({ endpoint }) => endpoint)).not.toContain("commands/list");
     await test.session.close();
@@ -4704,5 +4711,139 @@ describe("DeepSeek Harness Modern Session", () => {
       ),
     ).toHaveLength(1);
     await test.session.close();
+  });
+});
+
+describe("DeepSeek native goal lifecycle integration", () => {
+  const native = {
+    id: "g",
+    revision: 1,
+    objective: "ship",
+    phase: "active",
+    activation: "armed",
+    createdAt: 1000,
+    updatedAt: 2000,
+  };
+  it("waits for the native command acknowledgement before reading its goal", async () => {
+    const execution = deferred<ModernRemoteResult<unknown>>();
+    const test = setup([
+      () => execution.promise,
+      (endpoint) => {
+        expect(endpoint).toBe("goals/get");
+        return { ok: true, value: { ...native, activation: "disarmed" } };
+      },
+    ]);
+    await test.session.commands.execute({
+      turnId: turnId("goal"),
+      commandId: "dsh.goal",
+      arguments: { text: "ship" },
+    });
+    const reading = test.session.goals.read();
+    await Promise.resolve();
+    expect(test.remote.calls.map((c) => c.endpoint)).toEqual(["commands/execute"]);
+    execution.resolve({
+      ok: true,
+      value: { commandId: "native-goal", result: { kind: "success" } },
+    });
+    expect(await reading).toMatchObject({
+      ok: true,
+      value: { objective: "ship", status: "paused" },
+    });
+    await test.session.close();
+  });
+  it("retains a failed command when a native goal notification reads current state", async () => {
+    const execution = deferred<ModernRemoteResult<unknown>>();
+    const test = setup([
+      () => execution.promise,
+      () => ({ ok: true, value: { ...native, activation: "disarmed" } }),
+      () => ({ ok: true, value: { ...native, activation: "disarmed" } }),
+    ]);
+    await test.session.commands.execute({
+      turnId: turnId("failed-goal"),
+      commandId: "dsh.goal",
+      arguments: { text: "ship" },
+    });
+    execution.resolve({
+      ok: true,
+      value: { commandId: "native-goal", result: { kind: "error", text: "Native goal denied" } },
+    });
+    await vi.waitFor(() => expect(test.remote.calls).toHaveLength(1));
+    // Let the command terminal store its error before the notification arrives.
+    const outputs = test.session.outputs[Symbol.asyncIterator]();
+    for (;;) {
+      const output = await nextEvent(outputs);
+      if (output.type === "turn.completed") break;
+    }
+    test.feed.push(
+      event(0, "goal/change", {
+        kind: "goal/change",
+        version: 1,
+        operation: "pause",
+        goal: native,
+        roundsStarted: 1,
+        createdAt: 1000,
+        updatedAt: 2000,
+      }),
+    );
+    await vi.waitFor(() => expect(test.remote.calls).toHaveLength(2));
+    expect(await test.session.goals.read()).toMatchObject({
+      ok: false,
+      error: { message: "Native goal denied" },
+    });
+    expect(await test.session.goals.read()).toMatchObject({
+      ok: true,
+      value: { status: "paused" },
+    });
+    await test.session.close();
+  });
+  it("pauses native goals during a worker Turn without cancelling that Turn", async () => {
+    const paused = { ...native, phase: "paused", activation: "disarmed", revision: 2 };
+    const test = setup(
+      [
+        () => accepted(),
+        () => ({ ok: true, value: native }),
+        (endpoint, args) => {
+          expect(endpoint).toBe("goals/pause");
+          expect(args).toEqual({ agentId: SESSION_ID, ref: { id: "g", revision: 1 } });
+          return { ok: true, value: paused };
+        },
+        () => ({ ok: true, value: paused }),
+      ],
+      [],
+      ["request-1"],
+    );
+    const outputs = test.session.outputs[Symbol.asyncIterator]();
+    await test.session.execute({
+      type: "turn.start",
+      turnId: turnId("worker"),
+      input: [{ type: "text", text: "go" }],
+    });
+    test.feed.push(event(0, "turn/start", { turn: 1 }));
+    test.feed.push(event(1, "step/start", { turn: 1, step: 1 }));
+    test.feed.push(userMessage(2, "go", "request-1"));
+    expect(await nextEvent(outputs)).toMatchObject({ type: "turn.started" });
+    expect(await test.session.goals.control?.({ type: "set", status: "paused" })).toMatchObject({
+      ok: true,
+      value: { status: "paused" },
+    });
+    expect(test.remote.calls.map((c) => c.endpoint)).not.toContain("session/cancel");
+    await test.session.close();
+  });
+  it("removes continuation authority before closing a Session in a native goal gap", async () => {
+    let current = native;
+    const handler: CallHandler = (endpoint) => {
+      if (endpoint === "goals/get") return { ok: true, value: current };
+      expect(endpoint).toBe("goals/pause");
+      current = { ...native, phase: "paused", activation: "disarmed", revision: 2 };
+      return { ok: true, value: current };
+    };
+    const test = setup(Array.from({ length: 5 }, () => handler));
+    expect(await test.session.goals.read()).toMatchObject({
+      ok: true,
+      value: { status: "active" },
+    });
+    await test.session.close();
+    expect(test.remote.calls.map((c) => c.endpoint)).toContain("goals/pause");
+    expect(current.activation).toBe("disarmed");
   });
 });

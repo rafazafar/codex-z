@@ -1,5 +1,7 @@
+import type { HarnessGoalCapability } from "@codex-z/harness-adapter";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { controlClaudeGoal, prepareClaudeGoal } from "./goals.js";
 
 import {
   deleteSession as deleteClaudeSession,
@@ -200,6 +202,13 @@ const claudeCodeHarnessId = harnessIdSchema.parse("claude-code");
 export const claudeCommandCatalog = harnessCommandCatalogSchema.parse({
   commands: [
     {
+      id: "claude.goal",
+      invocation: "/goal",
+      label: "Goal",
+      description: "Set, read, or clear a native Claude Code goal",
+      argumentMode: "text",
+    },
+    {
       id: "claude.compact",
       invocation: "/compact",
       label: "Compact context",
@@ -232,6 +241,28 @@ type ClaudeHarnessCommand =
 function parseClaudeHarnessCommand(
   command: HarnessCommandInvocation,
 ): HarnessResult<ClaudeHarnessCommand> {
+  if (command.commandId === "claude.goal") {
+    const text = command.arguments?.text;
+    if (
+      (text !== undefined && typeof text !== "string") ||
+      (command.arguments && Object.keys(command.arguments).some((key) => key !== "text"))
+    )
+      return {
+        ok: false,
+        error: {
+          code: "invalidRequest",
+          message: "Claude goal accepts only text arguments",
+          retryable: false,
+        },
+      };
+    return {
+      ok: true,
+      value: {
+        id: "slash",
+        text: typeof text === "string" && text.trim() ? `/goal ${text.trim()}` : "/goal",
+      },
+    };
+  }
   if (command.commandId === "claude.init" || command.commandId === "claude.recap") {
     if (command.arguments && Object.keys(command.arguments).length > 0) {
       return {
@@ -501,7 +532,9 @@ class ClaudeHarnessSession implements HarnessSession {
     },
     history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
     subagents: { observe: true, readTranscript: true },
+    goals: { observe: true },
   };
+  readonly goals: HarnessGoalCapability;
   readonly commands: HarnessCommandCapability;
   readonly initialState: HarnessSessionState;
   readonly initialUsage = null;
@@ -530,6 +563,7 @@ class ClaudeHarnessSession implements HarnessSession {
   readonly #taskTracker = new ClaudeTaskTracker();
   #acceptingTurn = false;
   #active: ActiveTurn | null = null;
+  #goalInterruptedTurnId: TurnCancelCommand["turnId"] | null = null;
   #closePromise: Promise<void> | null = null;
   #configurationTask: Promise<void> | null = null;
   #phase: SessionPhase = "open";
@@ -603,6 +637,118 @@ class ClaudeHarnessSession implements HarnessSession {
         nativeSessionId: this.#sessionId,
         formatVersion: 1,
       });
+    this.goals = {
+      read: async () => {
+        if (this.#phase !== "open")
+          return { ok: false, error: invalidState("Claude Session is not open") };
+        try {
+          const starting = this.#transport === null;
+          const transport = await this.#ensureTransport();
+          if (starting) this.#publishState();
+          if (!transport.readGoal)
+            return {
+              ok: false,
+              error: {
+                code: "unsupported",
+                message: "Claude transport cannot read native goals",
+                retryable: false,
+              },
+            };
+          return { ok: true, value: await transport.readGoal() };
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: "nativeFailure",
+              message: error instanceof Error ? error.message : "Claude goal read failed",
+              retryable: true,
+            },
+          };
+        }
+      },
+      control: (update) =>
+        controlClaudeGoal(update, {
+          read: () => this.goals.read(),
+          active: () =>
+            this.#active
+              ? {
+                  turnId: this.#active.command.turnId,
+                  held:
+                    this.#active.held ||
+                    this.#occupancy.unsettled ||
+                    this.#transport?.canPauseGoal?.() === false,
+                  completion: this.#active.completion,
+                }
+              : null,
+          cancel: async (turnId) => {
+            const result = await this.#cancel({ type: "turn.cancel", turnId });
+            if (result.ok) this.#goalInterruptedTurnId = turnId;
+            return result;
+          },
+          canStart: () =>
+            this.#phase === "open" &&
+            !this.#active &&
+            !this.#acceptingTurn &&
+            !this.#configurationTask &&
+            !this.#readingHistory &&
+            !this.#transport?.isBusy?.(),
+          timeoutMs: this.#closeTimeoutMs,
+          start: async (text, clear) => {
+            if (clear) {
+              const prepared = await this.goals.prepare({ type: "clear" });
+              if (!prepared.ok) return prepared;
+            }
+            const turnId = hostTurnIdSchema.parse(this.#randomUUID());
+            this.#event({
+              type: "turn.autonomous.started",
+              turnId,
+              input: [{ type: "text", text }],
+            });
+            const accepted = clear
+              ? await this.#executeHarnessCommand({
+                  turnId,
+                  commandId: "claude.goal",
+                  arguments: { text: "clear" },
+                })
+              : await this.execute({ type: "turn.start", turnId, input: [{ type: "text", text }] });
+            if (!accepted.ok) {
+              this.#event({ type: "turn.started", turnId });
+              this.#event({
+                type: "turn.completed",
+                turnId,
+                outcome: { status: "failed", error: accepted.error },
+              });
+            }
+            return accepted;
+          },
+        }),
+      prepare: async (update) => {
+        if (this.#phase !== "open")
+          return { ok: false, error: invalidState("Claude Session is not open") };
+        const prepared = prepareClaudeGoal(update);
+        if (!prepared.ok) return prepared;
+        try {
+          const starting = this.#transport === null;
+          const transport = await this.#ensureTransport();
+          if (starting) this.#publishState();
+          if (
+            !transport.readGoal ||
+            !transport.slashCommands?.()?.commands.some((command) => command.name === "goal")
+          )
+            return {
+              ok: false,
+              error: {
+                code: "unsupported",
+                message: "Installed Claude Code does not expose headless goals",
+                retryable: false,
+              },
+            };
+          return prepared;
+        } catch (error) {
+          return { ok: false, error: startupFailure(error) };
+        }
+      },
+    };
     this.commands = {
       list: async () => ({ ok: true, value: this.#liveCommandCatalog() }),
       execute: (command) => this.#executeHarnessCommand(command),
@@ -792,6 +938,16 @@ class ClaudeHarnessSession implements HarnessSession {
       return { ok: false, error: invalidState("Claude Code Session closed during startup") };
     }
     if (startingTransport) this.#publishState();
+    if (transport.isBusy?.()) {
+      return {
+        ok: false,
+        error: {
+          code: "sessionBusy",
+          message: "Claude Code has native work in progress",
+          retryable: true,
+        },
+      };
+    }
     this.#usageGeneration += 1;
     this.#contextUsageFreshUntilMs = 0;
     this.#contextUsageCooldownUntilMs = 0;
@@ -843,6 +999,7 @@ class ClaudeHarnessSession implements HarnessSession {
       completion,
       resolveCompletion,
     };
+    this.#goalInterruptedTurnId = null;
     this.#active = active;
     this.#submittedInput = true;
     this.#event({ type: "turn.started", turnId: command.turnId });
@@ -871,10 +1028,17 @@ class ClaudeHarnessSession implements HarnessSession {
 
   /** Built-ins plus the live commands and skills of the started native Session. */
   #liveCommandCatalog(): HarnessCommandCatalog {
-    return claudeLiveCommandCatalog(
-      claudeCommandCatalog,
-      this.#transport?.slashCommands?.() ?? null,
-    );
+    const snapshot = this.#transport?.slashCommands?.() ?? null;
+    const builtIns =
+      snapshot && !snapshot.commands.some((command) => command.name === "goal")
+        ? {
+            ...claudeCommandCatalog,
+            commands: claudeCommandCatalog.commands.filter(
+              (command) => command.id !== "claude.goal",
+            ),
+          }
+        : claudeCommandCatalog;
+    return claudeLiveCommandCatalog(builtIns, snapshot);
   }
 
   async #executeHarnessCommand(
@@ -919,6 +1083,36 @@ class ClaudeHarnessSession implements HarnessSession {
       return { ok: false, error: invalidState("Claude Code Session closed during startup") };
     }
     if (startingTransport) this.#publishState();
+    if (transport.isBusy?.()) {
+      return {
+        ok: false,
+        error: {
+          code: "sessionBusy",
+          message: "Claude Code has native work in progress",
+          retryable: true,
+        },
+      };
+    }
+    if (
+      command.commandId === "claude.goal" &&
+      !transport.slashCommands?.()?.commands.some((entry) => entry.name === "goal")
+    )
+      return {
+        ok: false,
+        error: {
+          code: "unsupported",
+          message: "Installed Claude Code does not expose headless goals",
+          retryable: false,
+        },
+      };
+    if (command.commandId === "claude.goal" && parsed.value.id === "slash") {
+      const accepted = await this.execute({
+        type: "turn.start",
+        turnId: command.turnId,
+        input: [{ type: "text", text: parsed.value.text }],
+      });
+      return accepted.ok ? { ok: true, value: { ...accepted.value, persistTurn: true } } : accepted;
+    }
     this.#usageGeneration += 1;
     this.#contextUsageFreshUntilMs = 0;
     this.#contextUsageCooldownUntilMs = 0;
@@ -973,6 +1167,7 @@ class ClaudeHarnessSession implements HarnessSession {
       completion,
       resolveCompletion,
     };
+    this.#goalInterruptedTurnId = null;
     this.#active = active;
     this.#submittedInput = true;
     this.#event({ type: "turn.started", turnId: command.turnId });
@@ -1318,6 +1513,8 @@ class ClaudeHarnessSession implements HarnessSession {
 
   async #cancel(command: TurnCancelCommand): Promise<HarnessResult<TurnCancelAccepted>> {
     const active = this.#active;
+    if (!active && this.#goalInterruptedTurnId === command.turnId)
+      return { ok: true, value: { cancellationRequested: true } };
     if (!active || active.command.turnId !== command.turnId) {
       return {
         ok: false,
@@ -1429,6 +1626,7 @@ class ClaudeHarnessSession implements HarnessSession {
         onPermissionModeChanged: (mode) => this.#handlePermissionModeChanged(mode),
         onFault: () => this.#fault(faultError()),
         onPlanLimit: (planLimit) => this.#handlePlanLimit(planLimit),
+        onGoalChanged: (goal) => this.#event({ type: "goal.changed", goal }),
       });
       this.#transport = transport;
       transport.setAutonomousTurnHandler((turn) => this.#handleAutonomousTurn(turn));
@@ -1969,6 +2167,7 @@ class ClaudeHarnessSession implements HarnessSession {
       completion,
       resolveCompletion,
     };
+    this.#goalInterruptedTurnId = null;
     this.#active = active;
     this.#event({ type: "turn.autonomous.started", turnId, input: [] });
     this.#event({ type: "turn.started", turnId });

@@ -1,3 +1,4 @@
+import type { HarnessGoal } from "@codex-z/harness-adapter";
 import type {
   HarnessAccountSnapshot,
   HarnessThinkingOptionId,
@@ -180,6 +181,10 @@ export interface ClaudeIdleTurnHandler {
 
 export interface ClaudeTurnTransport {
   readonly sessionId: string;
+  readGoal?(): Promise<HarnessGoal | null>;
+  canPauseGoal?(): boolean;
+  /** Includes native autonomous work that has not reached Adapter projection. */
+  isBusy?(): boolean;
   setAutonomousTurnHandler(handler: (turn: ClaudeAutonomousTurn) => void): void;
   setIdleTurnHandler(handler: ClaudeIdleTurnHandler | null): void;
   /**
@@ -233,6 +238,7 @@ export interface ClaudeTransportFactoryInput {
   onPermissionModeChanged(permissionMode: ClaudePermissionMode): void;
   onFault(error: unknown): void;
   onPlanLimit(planLimit: ClaudePlanLimitEvent): void;
+  onGoalChanged?(goal: HarnessGoal | null): void;
 }
 
 export interface ClaudeModelInspector {

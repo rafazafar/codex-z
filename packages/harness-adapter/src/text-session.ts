@@ -19,6 +19,7 @@ import type {
   NativeTurnRef,
 } from "@codex-z/shared-contracts";
 
+import type { HarnessGoal, HarnessGoalCapability } from "./goals.js";
 import type { HostUsage } from "./usage.js";
 import type { HarnessCredentialExport, HarnessCredentialImports } from "./credential-imports.js";
 
@@ -240,6 +241,8 @@ export interface HarnessCommandInvocation {
 
 export interface HarnessCommandAccepted {
   turnId: HostTurnId;
+  /** Native command starts durable worker work. Retain history and usage from Turn start. */
+  persistTurn?: true;
 }
 
 export interface HarnessCommandCapability {
@@ -493,7 +496,13 @@ export interface SessionFaultedEvent {
   error: HarnessError;
 }
 
+export interface GoalChangedEvent {
+  type: "goal.changed";
+  goal: HarnessGoal | null;
+}
+
 export type HostEvent =
+  | GoalChangedEvent
   | SessionStateChangedEvent
   | SessionUsageChangedEvent
   | SubagentStateChangedEvent
@@ -517,6 +526,8 @@ export interface HarnessSession {
   readonly initialUsage: HostUsage | null;
   readonly outputs: AsyncIterable<HarnessOutput>;
   readonly commands?: HarnessCommandCapability;
+  /** Native goal state and native command mapping. No Host evaluator or continuation loop. */
+  readonly goals?: HarnessGoalCapability;
 
   refreshUsage?(): Promise<void>;
   readSnapshot(): Promise<HarnessResult<HostThreadSnapshot>>;

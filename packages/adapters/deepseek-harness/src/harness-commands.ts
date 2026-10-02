@@ -17,9 +17,16 @@ const commandDefinitions = [
   },
   {
     id: "dsh.goal",
-    invocation: "/dsh-goal",
+    invocation: "/goal",
     label: "Goal",
     description: "Set or view the goal for a long-running task",
+    argumentMode: "text",
+  },
+  {
+    id: "dsh.goal.legacy",
+    invocation: "/dsh-goal",
+    label: "Goal (legacy alias)",
+    description: "Use /goal for native goal control",
     argumentMode: "text",
   },
   {
@@ -52,6 +59,7 @@ export function deepSeekHarnessCommandCatalog(): HarnessCommandCatalog {
 export function parseDeepSeekHarnessCommand(
   command: HarnessCommandInvocation,
 ): HarnessResult<ParsedDeepSeekHarnessCommand> {
+  if (command.commandId === "dsh.goal.legacy") command = { ...command, commandId: "dsh.goal" };
   const definition = commandDefinitions.find(({ id }) => id === command.commandId);
   if (!definition) {
     return {

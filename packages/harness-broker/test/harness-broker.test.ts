@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   HarnessOutputChannel,
+  type HarnessGoal,
   type HarnessAdapter,
   type HarnessOutput,
   type HarnessSession,
@@ -159,6 +160,104 @@ describe("macOS Aqua Harness broker", () => {
       await native.close();
     },
   );
+
+  it("forwards native goal controls, events, command history, and errors", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cx-goal-broker-"));
+    roots.push(root);
+    const descriptorPath = path.join(root, "broker.json");
+    const socketPath =
+      process.platform === "win32"
+        ? `\\\\.\\pipe\\cx-goal-${randomUUID()}`
+        : path.join(root, "b.sock");
+    const native = new FakeHarnessAdapter(harnessIdSchema.parse("claude-code"));
+    const open = native.open.bind(native);
+    let goal: HarnessGoal | null = {
+      objective: "ship",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    let reject = false;
+    vi.spyOn(native, "open").mockImplementation(async (input) => {
+      const result = await open(input);
+      if (result.ok) {
+        const session = result.value;
+        if (!(session instanceof FakeHarnessSession)) throw new Error("Missing fake Session");
+        Object.assign(session, {
+          goals: {
+            read: async () => ({ ok: true, value: goal }),
+            prepare: async () => ({
+              ok: true,
+              value: { commandId: "claude.goal", arguments: { text: "ship" } },
+            }),
+            control: async () => {
+              if (reject)
+                return {
+                  ok: false,
+                  error: {
+                    code: "unsupported",
+                    message: "Native control unavailable",
+                    retryable: false,
+                  },
+                };
+              goal = goal ? { ...goal, status: "paused" } : null;
+              session.publishGoal(goal);
+              return { ok: true, value: goal };
+            },
+          },
+          commands: {
+            list: async () => ({ ok: true, value: { commands: [] } }),
+            execute: async ({ turnId }: { turnId: string }) => ({
+              ok: true,
+              value: { turnId, persistTurn: true },
+            }),
+          },
+        });
+      }
+      return result;
+    });
+    const server = await startHarnessBrokerServer({ descriptorPath, socketPath, adapter: native });
+    const client = new BrokeredHarnessAdapter({ descriptorPath });
+    try {
+      const opened = await client.open({ kind: "create", cwd: root });
+      if (!opened.ok || !opened.value.goals) throw new Error("Native goals unavailable");
+      const session = opened.value;
+      const goals = session.goals;
+      const control = goals?.control;
+      const commands = session.commands;
+      if (!goals || !control || !commands) throw new Error("Missing native controls");
+      const outputs = session.outputs[Symbol.asyncIterator]();
+      expect(await goals.read()).toEqual({ ok: true, value: goal });
+      expect(await goals.prepare({ type: "set", objective: "ship" })).toMatchObject({
+        value: { commandId: "claude.goal" },
+      });
+      expect(
+        await commands.execute({
+          turnId: hostTurnIdSchema.parse("goal"),
+          commandId: "claude.goal",
+        }),
+      ).toMatchObject({ value: { persistTurn: true } });
+      expect(await control({ type: "set", status: "paused" })).toMatchObject({
+        value: { status: "paused" },
+      });
+      expect(await outputs.next()).toMatchObject({
+        value: { kind: "event", event: { type: "goal.changed", goal: { status: "paused" } } },
+      });
+      reject = true;
+      expect(await control({ type: "clear" })).toMatchObject({
+        ok: false,
+        error: { code: "unsupported" },
+      });
+      await session.close();
+      expect(await goals.read()).toMatchObject({
+        ok: false,
+        error: { code: "unavailable" },
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 
   it("round-trips inspect, open, execute, streamed output, and close", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-z-harness-broker-"));

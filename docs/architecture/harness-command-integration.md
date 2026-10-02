@@ -131,13 +131,14 @@ Adapter static commandCatalog (no native request or Session)
        Pi:     native { type: "compact" }
        Grok:   x.ai/compact_conversation { sessionId, userContext? }
        Claude: dedicated transport
+               /goal     native goal work with a durable Turn identity
                /compact  context compaction
                /init     generate CLAUDE.md
                /recap    one-line session recap
        DeepSeek: fixed Adapter catalog
                  /compact
-                 /dsh-goal [<objective>|clear|edit <objective>|pause|resume]
-                   -> native /goal
+                 /goal [<objective>|clear|edit <objective>|pause|resume]
+                 /dsh-goal (compatibility alias for /goal)
                  /plan [off|message]
                  -> commands/execute { agentId, line }
   -> existing Host Item projection
@@ -151,13 +152,13 @@ maps it to custom summarization instructions. `/init` and `/recap` take no
 arguments. These commands invoke Harness-native operations and must not be
 submitted as Host text Turns.
 
-DeepSeek declares exactly `/compact`, `/dsh-goal`, and `/plan` in its static Adapter catalog, for both new and existing Threads. Neither catalog display nor command admission queries native `commands/list`. Execution retains ID, argument, busy-state, cancellation, and native-result validation; an unsupported native deployment reports its execution error rather than being probed beforehand. Native `feedback`, `permission`, `export`, the Client-side `/model`, and unknown commands are not exposed through this surface.
+DeepSeek declares `/compact`, `/goal`, its `/dsh-goal` compatibility alias, and `/plan` in its static Adapter catalog, for both new and existing Threads. Neither catalog display nor command admission queries native `commands/list`. Execution retains ID, argument, busy-state, cancellation, and native-result validation; raw command submission reports an unsupported native deployment at execution. Structured Desktop goal updates check the native Goal service before execution. Native `feedback`, `permission`, `export`, the Client-side `/model`, and unknown commands are not exposed through this surface.
 
 DeepSeek has been tested with `0.1.2-rc.1`, `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.5-rc.3` and `0.1.7-rc.1`. Other SemVer versions may attempt native protocol validation. The Adapter sends `images: []` with `commands/execute` for the `0.1.2` family's V0 profile, or `submittedAttachments: []` for the V3/V4 profiles; this version-specific translation does not add attachment input or native descriptor discovery to the public command surface.
 
 OpenCode exposes only the fixed `/compact` command, implemented through native Session summarization. Dynamic native command discovery and execution are not part of its Host integration.
 
-The public `/dsh-goal` invocation avoids Codex Desktop's built-in `/goal` command and maps only inside the Adapter to native DSH `/goal`. `/dsh-goal` and `/plan` accept text arguments only. DSH remains the owner of goal and plan state and any model-visible follow-up.
+`/goal` and `/dsh-goal` map inside the DeepSeek Adapter to native DSH `/goal`. They and `/plan` accept text arguments only. DSH remains the owner of goal and plan state and any model-visible follow-up. Claude and DeepSeek also map Desktop's structured goal protocol through the optional public goal contract. See [native Harness goals](harness-goals.md) for controls, lifecycle, unsupported budgets, and other Harness interface limits. The common live-command exclusion for goals remains in place; reviewed Adapter commands bypass it.
 
 ## Boundaries
 

@@ -1,4 +1,5 @@
 import type {
+  HarnessGoal,
   HarnessAdapter,
   HarnessModelRef,
   HarnessResult,
@@ -61,6 +62,8 @@ export interface ExternalThread {
   turns: JsonObject[];
   historyHydrated: boolean;
   running: boolean;
+  /** Last confirmed native goal; never used to evaluate completion. */
+  goal?: HarnessGoal | null;
   /** Restored while another Host session ran a Turn; its Harness handle may be stale. */
   restoredWhileLeased: boolean;
   activeTurnId: HostTurnId | null;

@@ -16,6 +16,9 @@ export const harnessBrokerMethodSchema = z.enum([
   "session.execute",
   "session.commands.list",
   "session.commands.execute",
+  "session.goals.read",
+  "session.goals.prepare",
+  "session.goals.control",
   "session.reopen",
   "session.close",
 ]);

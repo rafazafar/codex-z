@@ -541,6 +541,7 @@ describe("Claude Code HarnessAdapter", () => {
       },
       history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
       subagents: { observe: true, readTranscript: true },
+      goals: { observe: true },
     });
     const iterator = session.outputs[Symbol.asyncIterator]();
     await expect(
@@ -1151,6 +1152,7 @@ describe("Claude Code HarnessAdapter", () => {
       ok: true,
       value: {
         commands: [
+          { id: "claude.goal", invocation: "/goal" },
           { id: "claude.compact", invocation: "/compact" },
           { id: "claude.init", invocation: "/init", argumentMode: "none" },
           { id: "claude.recap", invocation: "/recap", argumentMode: "none" },
@@ -5038,4 +5040,159 @@ describe("Claude Code HarnessAdapter", () => {
       undefined,
     ]);
   });
+});
+
+describe("Claude native goal command admission", () => {
+  it("retains a durable native identity for goal model work", async () => {
+    const { adapter, transports } = fixture();
+    const session = await openSession(adapter);
+    // Initialize native transport through an ordinary Turn, then expose its native command metadata.
+    const first = hostTurnIdSchema.parse("initial");
+    await session.execute({
+      type: "turn.start",
+      turnId: first,
+      input: [{ type: "text", text: "initial" }],
+    });
+    const transport = transports[0];
+    if (!transport || !session.commands) throw new Error("Missing Claude transport");
+    transport.finish({ status: "succeeded" });
+    await Promise.resolve();
+    Object.assign(transport, {
+      slashCommands: () => ({
+        commands: [{ name: "goal", description: "Native goal", argumentHint: "" }],
+        skillNames: new Set(),
+      }),
+    });
+    const turnId = hostTurnIdSchema.parse("native-goal");
+    const iterator = session.outputs[Symbol.asyncIterator]();
+    expect(
+      await session.commands.execute({
+        turnId,
+        commandId: "claude.goal",
+        arguments: { text: "ship" },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(transport.turns.at(-1)?.text).toBe("/goal ship");
+    transport.finish({ status: "succeeded" });
+    let event;
+    do {
+      event = await nextEvent(iterator);
+    } while (event.type !== "turn.completed" || event.turnId !== turnId);
+    expect(event).toMatchObject({
+      nativeTurnRef: { nativeTurnKey: transport.turns.at(-1)?.userMessageId },
+    });
+    await session.close();
+  });
+});
+
+it("accepts Desktop's duplicate interrupt after native goal pause ends its Turn", async () => {
+  const { adapter, transports } = fixture();
+  const session = await openSession(adapter);
+  const turnId = hostTurnIdSchema.parse("goal-worker");
+  await session.execute({ type: "turn.start", turnId, input: [{ type: "text", text: "work" }] });
+  const transport = transports[0];
+  if (!transport || !session.goals) throw new Error("Missing goal Session");
+  let status: "active" | "paused" = "active";
+  Object.assign(transport, {
+    readGoal: async () => ({ objective: "ship", status, createdAt: 1, updatedAt: 1 }),
+  });
+  transport.abort.mockImplementation(async () => {
+    status = "paused";
+    transport.finish({ status: "cancelled", reason: "user" });
+  });
+  expect(await session.goals.control?.({ type: "set", status: "paused" })).toMatchObject({
+    ok: true,
+    value: { status: "paused" },
+  });
+  expect(await session.execute({ type: "turn.cancel", turnId })).toMatchObject({ ok: true });
+  expect(
+    await session.execute({ type: "turn.cancel", turnId: hostTurnIdSchema.parse("unrelated") }),
+  ).toMatchObject({ ok: false });
+  expect(transport.abort).toHaveBeenCalledOnce();
+  await session.close();
+});
+
+it("publishes the native Session state when goal is the first submitted command", async () => {
+  const { adapter, dependencies, transports } = fixture();
+  const factory = vi.mocked(dependencies.createTransport);
+  const create = factory.getMockImplementation();
+  if (!create) throw new Error("Missing native transport factory");
+  factory.mockImplementation((input) => {
+    const transport = create(input);
+    Object.assign(transport, {
+      slashCommands: () => ({
+        commands: [{ name: "goal", description: "Native goal", argumentHint: "" }],
+        skillNames: new Set(),
+      }),
+    });
+    return transport;
+  });
+  const session = await openSession(adapter);
+  const outputs = session.outputs[Symbol.asyncIterator]();
+  if (!session.commands) throw new Error("Missing native commands");
+  const turnId = hostTurnIdSchema.parse("first-goal");
+  expect(
+    await session.commands.execute({
+      turnId,
+      commandId: "claude.goal",
+      arguments: { text: "ship" },
+    }),
+  ).toMatchObject({ ok: true, value: { persistTurn: true } });
+  expect(await nextEvent(outputs)).toMatchObject({
+    type: "session.state.changed",
+    state: { nativeRef: { harnessId: "claude-code" } },
+  });
+  expect(await nextEvent(outputs)).toMatchObject({ type: "turn.started", turnId });
+  expect(transports[0]?.turns[0]?.text).toBe("/goal ship");
+  transports[0]?.finish({ status: "succeeded" });
+  await session.close();
+});
+
+it("rejects goal pause while native background work can still deliver a completion", async () => {
+  const { adapter, transports } = fixture();
+  const session = await openSession(adapter);
+  await session.execute(textTurn("foreground"));
+  const transport = transports[0];
+  if (!transport || !session.goals) throw new Error("Missing goal Session");
+  Object.assign(transport, {
+    readGoal: async () => ({ objective: "ship", status: "active", createdAt: 1, updatedAt: 1 }),
+    canPauseGoal: () => false,
+  });
+  expect(await session.goals.control?.({ type: "set", status: "paused" })).toMatchObject({
+    ok: false,
+    error: { code: "unsupported" },
+  });
+  expect(transport.abort).not.toHaveBeenCalled();
+  transport.finish({ status: "succeeded" });
+  await session.close();
+});
+
+it("rejects buffered native work without starting a Turn or faulting the Session", async () => {
+  const { adapter, transports } = fixture();
+  const session = await openSession(adapter);
+  const outputs = session.outputs[Symbol.asyncIterator]();
+  await session.execute(textTurn("warm"));
+  const transport = transports[0];
+  if (!transport) throw new Error("Missing native transport");
+  transport.finish({ status: "succeeded" });
+  for (;;) {
+    const event = await nextEvent(outputs);
+    if (event.type === "turn.completed") break;
+  }
+  let busy = true;
+  Object.assign(transport, { isBusy: () => busy });
+  const command = textTurn("next");
+  expect(await session.execute(command)).toMatchObject({
+    ok: false,
+    error: { code: "sessionBusy" },
+  });
+  expect(
+    await session.commands?.execute({ turnId: command.turnId, commandId: "claude.init" }),
+  ).toMatchObject({ ok: false, error: { code: "sessionBusy" } });
+  expect(transport.turns).toHaveLength(1);
+  busy = false;
+  expect(await session.execute(command)).toMatchObject({ ok: true });
+  expect(await nextEvent(outputs)).toMatchObject({ type: "turn.started", turnId: command.turnId });
+  transport.finish({ status: "succeeded" });
+  await session.close();
 });

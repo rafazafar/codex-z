@@ -600,3 +600,21 @@ describe("Claude history mapping", () => {
     ).toThrow("duplicate message IDs");
   });
 });
+
+it("restores native goal envelopes as user commands with their durable identity", () => {
+  const input =
+    "<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>ship\nwith tests</command-args>";
+  const snapshot = mapClaudeSnapshot(
+    [
+      message("user", "native-goal", input),
+      message("assistant", "worker", [{ type: "text", text: "Native worker output" }]),
+    ],
+    sessionId,
+  );
+  expect(snapshot.turns).toHaveLength(1);
+  expect(snapshot.turns[0]).toMatchObject({
+    nativeTurnRef: { nativeTurnKey: "native-goal" },
+    input: [{ type: "text", text: "/goal ship\nwith tests" }],
+    items: [{ item: { type: "agentMessage", text: "Native worker output" } }],
+  });
+});

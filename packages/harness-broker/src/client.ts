@@ -6,6 +6,8 @@ import {
   HarnessOutputChannel,
   parseHostUsage,
   type HarnessAdapter,
+  type HarnessGoal,
+  type HarnessGoalCapability,
   type HarnessCommandAccepted,
   type HarnessCommandCapability,
   type HarnessCommandInvocation,
@@ -56,6 +58,7 @@ import {
   type HarnessBrokerMethod,
 } from "./protocol.js";
 import {
+  brokerGoalSchema,
   harnessErrorSchema,
   harnessOutputSchema,
   harnessSessionStateSchema,
@@ -68,6 +71,7 @@ interface SessionMetadata {
   initialState: HarnessSessionState;
   initialUsage: HostUsage | null;
   commands: boolean;
+  goals?: { control: boolean };
 }
 
 interface PendingRequest {
@@ -145,6 +149,9 @@ function parseSessionMetadata(value: unknown): SessionMetadata {
     initialState: state,
     initialUsage: candidate.initialUsage === null ? null : parseHostUsage(candidate.initialUsage),
     commands: candidate.commands === true,
+    ...(candidate.goals && typeof candidate.goals === "object"
+      ? { goals: { control: (candidate.goals as { control?: unknown }).control === true } }
+      : {}),
   };
 }
 
@@ -363,6 +370,7 @@ class BrokeredHarnessSession implements HarnessSession {
   readonly #channel = new HarnessOutputChannel<HarnessOutput>();
   #connection: BrokerConnection;
   readonly commands?: HarnessCommandCapability;
+  readonly goals?: HarnessGoalCapability;
   #metadata: SessionMetadata;
   #faulted = false;
   #closed = false;
@@ -408,6 +416,48 @@ class BrokeredHarnessSession implements HarnessSession {
             };
           }
         },
+      };
+    }
+    if (metadata.goals) {
+      const request = async <T>(
+        method: HarnessBrokerMethod,
+        extra: Record<string, unknown>,
+      ): Promise<HarnessResult<T>> => {
+        if (this.#closed || this.#faulted)
+          return { ok: false, error: unavailable("Broker Session is unavailable", false) };
+        try {
+          return parseHarnessResult<T>(await this.#request(method, extra));
+        } catch (error) {
+          return {
+            ok: false,
+            error: unavailable(error instanceof Error ? error.message : String(error)),
+          };
+        }
+      };
+      const read = async (
+        method: HarnessBrokerMethod,
+        extra: Record<string, unknown>,
+      ): Promise<HarnessResult<HarnessGoal | null>> => {
+        const result = await request<unknown>(method, extra);
+        if (!result.ok) return result;
+        const parsed = brokerGoalSchema.nullable().safeParse(result.value);
+        return parsed.success
+          ? { ok: true, value: parsed.data }
+          : {
+              ok: false,
+              error: {
+                code: "protocolError",
+                message: "Broker returned an invalid native goal",
+                retryable: false,
+              },
+            };
+      };
+      this.goals = {
+        read: () => read("session.goals.read", {}),
+        prepare: (update) => request("session.goals.prepare", { update }),
+        ...(metadata.goals.control
+          ? { control: (update) => read("session.goals.control", { update }) }
+          : {}),
       };
     }
     connection.register(this);
