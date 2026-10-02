@@ -100,6 +100,7 @@ function fixture(
   const onFault = vi.fn();
   const onPermissionModeChanged = vi.fn();
   const onPlanLimit = vi.fn();
+  const onGoalChanged = vi.fn();
   const transport = new ClaudeSdkTransport({
     command: process.execPath,
     ...(environment ? { environment } : {}),
@@ -112,10 +113,12 @@ function fixture(
     onPermissionModeChanged,
     onFault,
     onPlanLimit,
+    onGoalChanged,
     queryFactory,
   });
   return {
     fakeQuery,
+    onGoalChanged,
     onFault,
     onPermissionModeChanged,
     onPlanLimit,
@@ -2322,5 +2325,41 @@ describe("ClaudeSdkTransport autonomous Subagent settlement ordering", () => {
     }
     expect(turns).toEqual([]);
     expect(immediate).toEqual([expect.objectContaining({ nativeSubagentId: "existing-child" })]);
+  });
+});
+
+describe("native goal SDK integration", () => {
+  it("confirms structured receipts, retains paused state, and resumes through the native query", async () => {
+    const { transport, fakeQuery, onGoalChanged } = fixture();
+    await transport.start();
+    try {
+      const turn = transport.runTurn("/goal ship", "00000000-0000-4000-8000-000000000099", vi.fn());
+      const read = transport.readGoal();
+      fakeQuery.push({
+        type: "assistant",
+        timestamp: "2026-10-02T00:00:00Z",
+        local_command_run: { command: "goal", args: "ship" },
+        message: { model: "<synthetic>", content: [{ type: "text", text: "Goal set: ship" }] },
+      } as unknown as SDKMessage);
+      expect(await read).toMatchObject({ objective: "ship", status: "active" });
+      await transport.abort();
+      expect(fakeQuery.interrupt).toHaveBeenCalledOnce();
+      expect(await transport.readGoal()).toMatchObject({ objective: "ship", status: "paused" });
+      completeTurn(fakeQuery);
+      await turn;
+      const resumed = transport.runTurn(
+        "Continue working toward the current goal.",
+        "00000000-0000-4000-8000-000000000100",
+        vi.fn(),
+      );
+      expect(await transport.readGoal()).toMatchObject({ status: "active" });
+      fakeQuery.push({ type: "active_goal", value: null } as unknown as SDKMessage);
+      completeTurn(fakeQuery);
+      await resumed;
+      expect(await transport.readGoal()).toBeNull();
+      expect(onGoalChanged).toHaveBeenLastCalledWith(null);
+    } finally {
+      await transport.close();
+    }
   });
 });

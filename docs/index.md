@@ -16,6 +16,7 @@ This index lists current documents and historical archives by feature area. Prop
 | [`architecture/harness-plugin-runtime.md`](architecture/harness-plugin-runtime.md) | Current plugin loading, preinstalled distribution, runtime contracts, and trust boundaries. Read first for plugin changes. |
 | [`architecture/harness-plugin-architecture.md`](architecture/harness-plugin-architecture.md) | Target plugin architecture and incomplete migration plan. Interface examples are not current APIs. |
 | [`architecture/harness-command-integration.md`](architecture/harness-command-integration.md) | Native-command ownership across Adapter, Host, and Renderer. Read when adding commands. |
+| [`architecture/harness-goals.md`](architecture/harness-goals.md) | Native goal state, controls, ownership, limits, and feasibility across all preinstalled Harnesses. |
 | [`architecture/harness-executable-discovery.md`](architecture/harness-executable-discovery.md) | Cross-platform CLI discovery, installation guidance, and DSH connection limits. |
 | [`architecture/harness-session-import.md`](architecture/harness-session-import.md) | Local Session import contracts and recovery boundaries. |
 | [`architecture/external-thread-steering.md`](architecture/external-thread-steering.md) | External steering: cancel the old Turn, then start the new input. |

@@ -1,3 +1,6 @@
+import type { HarnessGoal } from "@codex-z/harness-adapter";
+import { ClaudeGoalObserver, claudeTranscriptGoal } from "./goals.js";
+import { readClaudeTranscriptEntries } from "./claude-transcript.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import {
@@ -117,6 +120,7 @@ export interface ClaudeSdkTransportOptions {
   onPermissionModeChanged(permissionMode: ClaudePermissionMode): void;
   onFault(error: unknown): void;
   onPlanLimit(planLimit: ClaudePlanLimitEvent): void;
+  onGoalChanged?(goal: HarnessGoal | null): void;
   queryFactory?: typeof query;
 }
 
@@ -375,6 +379,7 @@ function canDeliverSettlementImmediately(
 
 export class ClaudeSdkTransport implements ClaudeTurnTransport {
   readonly sessionId: string;
+  readonly #goals: ClaudeGoalObserver;
   readonly #children: ChildProcessWithoutNullStreams[] = [];
   readonly #abortTimeoutMs: number;
   readonly #closeTimeoutMs: number;
@@ -414,6 +419,7 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
 
   constructor(options: ClaudeSdkTransportOptions) {
     this.sessionId = options.sessionId;
+    this.#goals = new ClaudeGoalObserver((goal) => options.onGoalChanged?.(goal));
     this.#cwd = options.cwd;
     this.#abortTimeoutMs = options.abortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
     this.#closeTimeoutMs = options.closeTimeoutMs;
@@ -453,6 +459,14 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
       ...(this.#command ? { command: this.#command } : {}),
       environment: this.#environment,
     });
+    if (this.#openMode === "resume") {
+      const entries = await readClaudeTranscriptEntries({
+        cwd: this.#cwd,
+        environment: this.#environment,
+        sessionId: this.sessionId,
+      });
+      this.#goals.restore(claudeTranscriptGoal(entries ?? []));
+    }
     const thinking = claudeThinkingConfiguration(this.#thinkingOptionId);
     const activeQuery = this.#queryFactory({
       prompt: this.#input,
@@ -500,6 +514,10 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
     }
     this.#started = true;
     this.#consumeTask = this.#consume(activeQuery);
+  }
+
+  readGoal(): Promise<HarnessGoal | null> {
+    return this.#goals.read();
   }
 
   slashCommands(): ClaudeSlashCommandSnapshot | null {
@@ -589,7 +607,8 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
     if (this.#closePromise || !this.#started || !this.#query) {
       return Promise.reject(new Error("Claude SDK transport is not started"));
     }
-    if (this.#active) return Promise.reject(new Error("Claude SDK transport is busy"));
+    if (this.#active || this.#autonomous?.nativeTurnKey || this.#autonomous?.events.length)
+      return Promise.reject(new Error("Claude SDK transport is busy"));
     const promise = new Promise<ClaudeTransportTurnResult>((resolve, reject) => {
       this.#active = {
         accumulator: new ClaudeNativeTurnAccumulator(
@@ -602,6 +621,7 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
         reject,
       };
     });
+    this.#goals.begin(text);
     this.#input.push({
       type: "user",
       message: { role: "user", content: text },
@@ -694,6 +714,7 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
     const timeout = rejectAfter(this.#abortTimeoutMs, INTERRUPT_TIMEOUT_MESSAGE);
     try {
       await Promise.race([activeQuery.interrupt(), timeout.promise]);
+      this.#goals.pause();
     } catch (error) {
       await this.close();
       throw error instanceof Error ? error : new Error(INTERRUPT_TIMEOUT_MESSAGE);
@@ -816,6 +837,7 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
   }
 
   async #close(): Promise<void> {
+    this.#goals.settle(new Error("Claude Session closed during goal confirmation"));
     const failures: unknown[] = [];
     if (this.#active) this.#closeInteractions(this.#active, "cancelled");
     try {
@@ -875,6 +897,7 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
     active?.reject(new Error("Claude SDK transport closed"));
     if (failures.length > 0)
       throw new AggregateError(failures, "Claude SDK shutdown could not be confirmed");
+    this.#goals.pause();
   }
 
   async #stopBackgroundTasks(): Promise<void> {
@@ -915,6 +938,13 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
   async #consume(activeQuery: Query): Promise<void> {
     try {
       for await (const message of activeQuery) {
+        this.#goals.observe(message);
+        if (isRecord(message) && message.type === "result") {
+          this.#goals.settle();
+          // Headless Claude returns control with the hook retained when continuation stops.
+          // Background completions remain native autonomous work, and are observed separately.
+          if (this.#backgroundTasks.size === 0) this.#goals.pause();
+        }
         this.#observeBackgroundTasks(message);
         this.#observeSlashCommands(message);
         const permissionMode = permissionModeFromMessage(message);
@@ -992,6 +1022,8 @@ export class ClaudeSdkTransport implements ClaudeTurnTransport {
       }
       if (!this.#closePromise) throw new Error("Claude SDK Query ended unexpectedly");
     } catch (error) {
+      this.#goals.settle(error instanceof Error ? error : new Error(String(error)));
+      this.#goals.pause();
       const active = this.#active;
       if (active) this.#closeInteractions(active, "cancelled");
       this.#active = null;

@@ -10,7 +10,7 @@ import {
 const turnId = hostTurnIdSchema.parse("command-turn");
 
 describe("DeepSeek Harness static command registry", () => {
-  it("provides exactly three valid commands without native discovery", () => {
+  it("provides native commands and the legacy goal alias without native discovery", () => {
     const catalog = deepSeekHarnessCommandCatalog();
     expect(harnessCommandCatalogSchema.parse(catalog)).toEqual(catalog);
     expect(
@@ -21,7 +21,8 @@ describe("DeepSeek Harness static command registry", () => {
       })),
     ).toEqual([
       { id: "dsh.compact", invocation: "/compact", argumentMode: "none" },
-      { id: "dsh.goal", invocation: "/dsh-goal", argumentMode: "text" },
+      { id: "dsh.goal", invocation: "/goal", argumentMode: "text" },
+      { id: "dsh.goal.legacy", invocation: "/dsh-goal", argumentMode: "text" },
       { id: "dsh.plan", invocation: "/plan", argumentMode: "text" },
     ]);
   });

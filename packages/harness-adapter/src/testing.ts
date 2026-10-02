@@ -1,3 +1,4 @@
+import type { HarnessGoal, HarnessGoalCapability } from "./goals.js";
 import {
   harnessIdSchema,
   harnessModelCatalogSchema,
@@ -156,6 +157,7 @@ export class FakeHarnessSession implements HarnessSession {
   readonly cwd: string;
   readonly initialState: HarnessSessionState;
   readonly initialUsage: HostUsage | null;
+  goals?: HarnessGoalCapability;
   commands?: HarnessCommandCapability;
   readonly interactionResponses: InteractionRespondCommand[] = [];
   readonly outputs: AsyncIterable<HarnessOutput>;
@@ -278,6 +280,10 @@ export class FakeHarnessSession implements HarnessSession {
     this.#event({ type: "turn.autonomous.started", turnId, input });
     this.#event({ type: "turn.started", turnId });
     this.succeedTurn();
+  }
+
+  publishGoal(goal: HarnessGoal | null): void {
+    this.#event({ type: "goal.changed", goal });
   }
 
   publishUsage(usage: HostUsage | null, observedForTurnId?: HostTurnId): void {

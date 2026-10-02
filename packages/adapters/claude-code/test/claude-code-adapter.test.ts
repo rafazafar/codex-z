@@ -541,6 +541,7 @@ describe("Claude Code HarnessAdapter", () => {
       },
       history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
       subagents: { observe: true, readTranscript: true },
+      goals: { observe: true },
     });
     const iterator = session.outputs[Symbol.asyncIterator]();
     await expect(
@@ -1151,6 +1152,7 @@ describe("Claude Code HarnessAdapter", () => {
       ok: true,
       value: {
         commands: [
+          { id: "claude.goal", invocation: "/goal" },
           { id: "claude.compact", invocation: "/compact" },
           { id: "claude.init", invocation: "/init", argumentMode: "none" },
           { id: "claude.recap", invocation: "/recap", argumentMode: "none" },
@@ -5038,4 +5040,74 @@ describe("Claude Code HarnessAdapter", () => {
       undefined,
     ]);
   });
+});
+
+describe("Claude native goal command admission", () => {
+  it("retains a durable native identity for goal model work", async () => {
+    const { adapter, transports } = fixture();
+    const session = await openSession(adapter);
+    // Initialize native transport through an ordinary Turn, then expose its native command metadata.
+    const first = hostTurnIdSchema.parse("initial");
+    await session.execute({
+      type: "turn.start",
+      turnId: first,
+      input: [{ type: "text", text: "initial" }],
+    });
+    const transport = transports[0];
+    if (!transport || !session.commands) throw new Error("Missing Claude transport");
+    transport.finish({ status: "succeeded" });
+    await Promise.resolve();
+    Object.assign(transport, {
+      slashCommands: () => ({
+        commands: [{ name: "goal", description: "Native goal", argumentHint: "" }],
+        skillNames: new Set(),
+      }),
+    });
+    const turnId = hostTurnIdSchema.parse("native-goal");
+    const iterator = session.outputs[Symbol.asyncIterator]();
+    expect(
+      await session.commands.execute({
+        turnId,
+        commandId: "claude.goal",
+        arguments: { text: "ship" },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(transport.turns.at(-1)?.text).toBe("/goal ship");
+    transport.finish({ status: "succeeded" });
+    let event;
+    do {
+      event = await nextEvent(iterator);
+    } while (event.type !== "turn.completed" || event.turnId !== turnId);
+    expect(event).toMatchObject({
+      nativeTurnRef: { nativeTurnKey: transport.turns.at(-1)?.userMessageId },
+    });
+    await session.close();
+  });
+});
+
+it("accepts Desktop's duplicate interrupt after native goal pause ends its Turn", async () => {
+  const { adapter, transports } = fixture();
+  const session = await openSession(adapter);
+  const turnId = hostTurnIdSchema.parse("goal-worker");
+  await session.execute({ type: "turn.start", turnId, input: [{ type: "text", text: "work" }] });
+  const transport = transports[0];
+  if (!transport || !session.goals) throw new Error("Missing goal Session");
+  let status: "active" | "paused" = "active";
+  Object.assign(transport, {
+    readGoal: async () => ({ objective: "ship", status, createdAt: 1, updatedAt: 1 }),
+  });
+  transport.abort.mockImplementation(async () => {
+    status = "paused";
+    transport.finish({ status: "cancelled", reason: "user" });
+  });
+  expect(await session.goals.control?.({ type: "set", status: "paused" })).toMatchObject({
+    ok: true,
+    value: { status: "paused" },
+  });
+  expect(await session.execute({ type: "turn.cancel", turnId })).toMatchObject({ ok: true });
+  expect(
+    await session.execute({ type: "turn.cancel", turnId: hostTurnIdSchema.parse("unrelated") }),
+  ).toMatchObject({ ok: false });
+  expect(transport.abort).toHaveBeenCalledOnce();
+  await session.close();
 });

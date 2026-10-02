@@ -1,3 +1,11 @@
+import type { HarnessGoal, HarnessGoalCapability } from "@codex-z/harness-adapter";
+import {
+  DeepSeekGoalError,
+  readDeepSeekGoal,
+  projectDeepSeekGoal,
+  prepareDeepSeekGoal,
+  controlDeepSeekGoal,
+} from "./goals.js";
 import { randomUUID as nodeRandomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
@@ -135,6 +143,7 @@ export function modernSessionCapabilities(
     },
     history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
     autonomousTurns: { observe: true },
+    goals: { observe: true },
   };
 }
 
@@ -297,6 +306,11 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
   readonly initialState: HarnessSessionState;
   readonly initialUsage: HostUsage | null;
   readonly outputs: AsyncIterable<HarnessOutput>;
+  readonly goals: HarnessGoalCapability;
+  #nativeGoalActive = false;
+  #goalOperation: Promise<void> = Promise.resolve();
+  #goalCommandTask: Promise<void> | undefined;
+  #goalCommandError: HarnessError | undefined;
   readonly commands: HarnessCommandCapability;
 
   readonly #remote: ModernJournalRemote & ModernConfigurationRemote;
@@ -436,6 +450,78 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
     this.#fallbackThinkingOptionId = configuration.state.effectiveThinkingOptionId;
     this.capabilities = modernSessionCapabilities(this.#permissionModes);
     this.outputs = this.#channel.outputs;
+    const performGoalOperation = async (
+      run: () => Promise<HarnessGoal | null>,
+    ): Promise<HarnessResult<HarnessGoal | null>> => {
+      try {
+        if (this.#closed || this.#closing || this.#faulted)
+          throw new Error("DeepSeek Session is unavailable");
+        const goal = await run();
+        this.#nativeGoalActive = goal?.status === "active";
+        this.#emit({ type: "goal.changed", goal });
+        return { ok: true, value: goal };
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: error instanceof DeepSeekGoalError ? error.code : "nativeFailure",
+            message: error instanceof Error ? error.message : "Native goal request failed",
+            retryable: !(error instanceof DeepSeekGoalError),
+          },
+        };
+      }
+    };
+    const goalResult = (run: () => Promise<HarnessGoal | null>) => {
+      const operation = this.#goalOperation.then(() => performGoalOperation(run));
+      this.#goalOperation = operation.then(() => undefined);
+      return operation;
+    };
+    this.goals = {
+      read: () =>
+        goalResult(async () => {
+          if (this.#goalCommandTask) {
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([
+                this.#goalCommandTask,
+                new Promise<never>((_, reject) => {
+                  timer = setTimeout(
+                    () => reject(new Error("Native goal command is still pending")),
+                    5000,
+                  );
+                }),
+              ]);
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          }
+          if (this.#goalCommandError) {
+            const error = this.#goalCommandError;
+            this.#goalCommandError = undefined;
+            throw new Error(error.message);
+          }
+          return projectDeepSeekGoal(await readDeepSeekGoal(this.#remote, this.#sessionId));
+        }),
+      control: (update) =>
+        goalResult(() => controlDeepSeekGoal(this.#remote, this.#sessionId, update)),
+      prepare: async (update) => {
+        try {
+          if (this.#closed || this.#closing || this.#faulted)
+            throw new Error("DeepSeek Session is unavailable");
+          return prepareDeepSeekGoal(update, await readDeepSeekGoal(this.#remote, this.#sessionId));
+        } catch (error) {
+          return {
+            ok: false,
+            error: {
+              code: "unsupported",
+              message:
+                error instanceof Error ? error.message : "Native goal service is unavailable",
+              retryable: false,
+            },
+          };
+        }
+      },
+    };
     this.commands = {
       list: () => this.#listHarnessCommands(),
       execute: (command) => this.#executeHarnessCommand(command),
@@ -1210,7 +1296,14 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
       this.#operationControllers.add(active.abort);
       this.#emit({ type: "turn.started", turnId: command.turnId });
       this.#emit({ type: "item.started", turnId: command.turnId, item });
-      void this.#runHarnessCommand(active);
+      const running = this.#runHarnessCommand(active);
+      if (parsed.value.commandId === "dsh.goal") {
+        this.#goalCommandError = undefined;
+        this.#goalCommandTask = running;
+        void running.finally(() => {
+          if (this.#goalCommandTask === running) this.#goalCommandTask = undefined;
+        });
+      }
       return { ok: true, value: { turnId: command.turnId } };
     } finally {
       this.#operationControllers.delete(admission.abort);
@@ -1306,6 +1399,18 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
   #finishCommand(active: ActiveCommand, outcome: HostItemOutcome, output?: string): void {
     if (this.#activeCommand !== active) return;
     this.#activeCommand = undefined;
+    if (
+      ["dsh.goal", "dsh.goal.legacy"].includes(active.command.commandId) &&
+      outcome.status !== "succeeded"
+    )
+      this.#goalCommandError =
+        outcome.status === "failed"
+          ? outcome.error
+          : {
+              code: "nativeFailure",
+              message: "Native goal command was cancelled",
+              retryable: true,
+            };
     const item =
       active.item.type === "commandExecution" && output !== undefined
         ? { ...active.item, output }
@@ -1439,6 +1544,10 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
     this.#validator.accept(event);
     this.#observeAssistantSettlement(event);
     this.#events.push(event);
+    if (event.type === "goal/change") {
+      // Durable events trigger a fresh read; process-local activation is not in the journal.
+      void this.goals.read();
+    }
     this.#historyBytes += bytes;
     this.#receive(event);
   }
@@ -2341,6 +2450,7 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
     const failure = sanitizedHarnessError(error);
     const acceptedPending = this.#acceptedPending();
     this.#faultMayHaveNativeWork = Boolean(
+      this.#nativeGoalActive ||
       (this.#active && !this.#active.terminal) ||
       this.#pendingByRequestId.size > 0 ||
       this.#buffer ||
@@ -2428,6 +2538,23 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
   async #performClose(): Promise<void> {
     this.#closing = true;
     let stopFailure: unknown;
+    if (this.#nativeGoalActive) {
+      try {
+        // Remove native continuation authority before stopping or detaching the worker.
+        await this.#goalOperation;
+        const current = await readDeepSeekGoal(this.#remote, this.#sessionId);
+        if (current?.phase === "active" && current.activation === "armed") {
+          const goal = await controlDeepSeekGoal(this.#remote, this.#sessionId, {
+            type: "set",
+            status: "paused",
+          });
+          this.#nativeGoalActive = goal?.status === "active";
+          this.#emit({ type: "goal.changed", goal });
+        }
+      } catch (error) {
+        stopFailure = error;
+      }
+    }
     const activeAtClose = this.#active;
     const pendingAtClose = new Set(this.#pendingByRequestId.values());
     if (this.#buffer?.pending) pendingAtClose.add(this.#buffer.pending);

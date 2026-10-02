@@ -12,6 +12,7 @@ import {
   CREDENTIAL_IMPORTS_METHOD,
   credentialImportsParamsSchema,
 } from "@codex-z/shared-contracts";
+import { routeExternalGoal, desktopGoal, ExternalGoalError } from "./external-goal-routing.js";
 import { handleCredentialImports } from "./credential-imports.js";
 import {
   rewriteDelegationMentionInput,
@@ -441,6 +442,9 @@ const EXPLICIT_EXTERNAL_THREAD_METHODS = new Set([
   "thread/archive",
   "thread/delete",
   "thread/fork",
+  "thread/goal/get",
+  "thread/goal/set",
+  "thread/goal/clear",
   "thread/inject_items",
   "thread/items/list",
   "thread/metadata/update",
@@ -597,6 +601,7 @@ export class AppServerHost {
   #subagentThreadStatuses = new Map<string, "active" | "idle">();
   #runningSubagentsByParent = new Map<string, Set<string>>();
   #pendingExternalCommandRequests = new Set<string>();
+  #pendingExternalGoalResponses = new Map<string, TurnProjectionGate>();
   #closeRequested = false;
   readonly #pluginLoadAbort = new AbortController();
   #pluginLoading: Promise<void> | undefined;
@@ -744,6 +749,7 @@ export class AppServerHost {
           }
         },
         canRelease: (thread) =>
+          thread.goal?.status !== "active" &&
           !this.#hasRunningSubagents(thread.id) &&
           !this.#externalSteering.hasPending(thread.id) &&
           !this.#pendingExternalCommandRequests.has(thread.id) &&
@@ -855,6 +861,8 @@ export class AppServerHost {
         "codex-z/thread/model/select",
         "codex-z/thread/thinking/select",
         "codex-z/thread/permission-mode/select",
+        "thread/goal/set",
+        "thread/goal/clear",
         "thread/rollback",
         "thread/revert",
         "turn/start",
@@ -885,7 +893,10 @@ export class AppServerHost {
     for (const id of this.#turnLeases.heldBy(this)) {
       if (this.#leaseOperations.has(id)) continue;
       const thread = this.#externalRuntime.get(id);
-      if (!thread || (!thread.running && thread.activeTurnId === null)) {
+      if (
+        !thread ||
+        (!thread.running && thread.activeTurnId === null && thread.goal?.status !== "active")
+      ) {
         this.#turnLeases.release(id, this);
       }
     }
@@ -1023,7 +1034,10 @@ export class AppServerHost {
       this.#runningSubagentsByParent.size > 0 ||
       this.#externalRuntime
         .values()
-        .some((thread) => thread.running || thread.activeTurnId !== null)
+        .some(
+          (thread) =>
+            thread.running || thread.activeTurnId !== null || thread.goal?.status === "active",
+        )
     );
   }
 
@@ -1562,6 +1576,19 @@ export class AppServerHost {
           params,
           resolution.historyFresh,
         );
+        return;
+      }
+    }
+    if (["thread/goal/get", "thread/goal/set", "thread/goal/clear"].includes(request.method)) {
+      const params = requestObject(request);
+      const resolution =
+        typeof params.threadId === "string"
+          ? await this.#resolveExternalThread(params.threadId)
+          : ({ kind: "official" } as const);
+      if (await this.#writeResolutionError(request, resolution)) return;
+      if (resolution.kind === "external") {
+        // Keep the mutation lease and the Thread request queue until native confirmation.
+        await this.#externalGoalRequest(request, resolution.thread);
         return;
       }
     }
@@ -3119,6 +3146,7 @@ export class AppServerHost {
         ...(arguments_ ? { arguments: arguments_ } : {}),
       });
       if (!result.ok) throw new ExternalCommandError(-32073, result.error.message);
+      if (result.value.persistTurn) thread.ephemeralTurnIds.delete(turnId);
       return { turnId: result.value.turnId, turn: projection.projector.pendingTurn(), gate };
     } catch (error) {
       thread.running = false;
@@ -4008,6 +4036,44 @@ export class AppServerHost {
     }
   }
 
+  async #externalGoalRequest(request: JsonRpcRequest, thread: ExternalThread): Promise<void> {
+    const response = turnProjectionGate();
+    this.#pendingExternalGoalResponses.set(thread.id, response);
+    let admitted: TurnProjectionGate | undefined;
+    try {
+      const result = await routeExternalGoal(request.method, requestObject(request), {
+        threadId: thread.id,
+        session: thread.session,
+        busy: () =>
+          this.#externalThreadBusy(thread) || this.#pendingExternalCommandRequests.has(thread.id),
+        confirmed: (goal) => {
+          if (goal?.status === "active" && !this.#claimTurnLease(thread))
+            throw new ExternalGoalError(-32072, "Another Host owns the active native goal");
+          thread.goal = goal;
+          this.#signalActiveWorkChanged();
+        },
+        begin: async (commandId, arguments_) => {
+          const started = await this.#beginExternalCommand(thread, commandId, arguments_);
+          admitted = started.gate;
+          return started;
+        },
+      });
+      await this.#writer.json(rpcEnvelope(request, { result }));
+    } catch (error) {
+      await this.#writer.json(
+        rpcError(
+          request,
+          error instanceof ExternalGoalError ? error.code : -32073,
+          errorMessage(error),
+        ),
+      );
+    } finally {
+      this.#pendingExternalGoalResponses.delete(thread.id);
+      response.resolve();
+      admitted?.resolve();
+    }
+  }
+
   async #startExternalTurn(request: JsonRpcRequest, thread: ExternalThread): Promise<void> {
     if (this.#externalThreadBusy(thread) || this.#pendingExternalCommandRequests.has(thread.id)) {
       await this.#writer.json(
@@ -4186,6 +4252,16 @@ export class AppServerHost {
     if (typeof requestedTurnId === "string")
       this.#externalSteering.interrupt(thread.id, requestedTurnId);
     if (
+      typeof requestedTurnId === "string" &&
+      thread.goal?.status === "paused" &&
+      !thread.running &&
+      thread.activeTurnId === null &&
+      thread.projectedTerminalTurnId === requestedTurnId
+    ) {
+      await this.#writer.json(rpcEnvelope(request, { result: {} }));
+      return;
+    }
+    if (
       typeof requestedTurnId !== "string" ||
       !thread.running ||
       thread.activeTurnId !== requestedTurnId
@@ -4232,6 +4308,9 @@ export class AppServerHost {
       this.#externalRuntime.idleRelease.outputFailed(thread);
       this.#diagnose(error);
     } finally {
+      // The native state is unknown after observation ends. Do not report a synthetic clear.
+      delete thread.goal;
+      this.#signalActiveWorkChanged();
       this.#externalSteering.fault(
         thread.id,
         new Error("External Harness output ended before replacement"),
@@ -4249,6 +4328,27 @@ export class AppServerHost {
       return;
     }
     let event = output.event;
+    if (event.type === "goal.changed") {
+      await this.#pendingExternalGoalResponses.get(thread.id)?.promise;
+      if (this.#externalRuntime.get(thread.id) !== thread) return;
+      thread.goal = event.goal;
+      if (event.goal?.status === "active" && !this.#claimTurnLease(thread))
+        throw new Error("Another Host owns the active native goal");
+      this.#signalActiveWorkChanged();
+      await this.#writer.json(
+        event.goal
+          ? {
+              method: "thread/goal/updated",
+              params: {
+                threadId: thread.id,
+                turnId: null,
+                goal: desktopGoal(thread.id, event.goal),
+              },
+            }
+          : { method: "thread/goal/cleared", params: { threadId: thread.id } },
+      );
+      return;
+    }
     if (event.type === "item.started" && event.item.type === "subagentDelegation") {
       event = {
         ...event,
@@ -4370,6 +4470,8 @@ export class AppServerHost {
       return;
     }
     if (event.type === "session.faulted") {
+      delete thread.goal;
+      this.#signalActiveWorkChanged();
       this.#externalSteering.fault(thread.id, new Error(event.error.message));
       thread.stateObserver.fault(new Error(event.error.message));
       this.#diagnose(`${thread.harnessId} Harness Session faulted: ${event.error.message}`);
@@ -4377,6 +4479,7 @@ export class AppServerHost {
     }
 
     if (event.type === "turn.autonomous.started") {
+      await this.#pendingExternalGoalResponses.get(thread.id)?.promise;
       if (thread.running || thread.activeTurnId || !this.#claimTurnLease(thread)) {
         throw new Error("External autonomous Turn started while another Turn is active");
       }
@@ -4413,6 +4516,8 @@ export class AppServerHost {
       await this.#resolveDesktopApproval(event.interactionId);
       await this.#resolveDesktopQuestion(event.interactionId);
     }
+    if (event.type === "turn.completed" && event.nativeTurnRef)
+      thread.ephemeralTurnIds.delete(event.turnId);
     const ephemeralTurn =
       event.type === "turn.completed" && thread.ephemeralTurnIds.has(event.turnId);
     if (event.type === "turn.completed" && !ephemeralTurn) {

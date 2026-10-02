@@ -56,7 +56,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * assistant messages. History recovery needs every persisted main-session
  * message in transcript order instead.
  */
-export async function readClaudeTranscript(input: {
+export async function readClaudeTranscriptEntries(input: {
   cwd: string;
   environment: NodeJS.ProcessEnv;
   sessionId: string;
@@ -74,6 +74,15 @@ export async function readClaudeTranscript(input: {
       continue;
     }
     if (
+      isRecord(entry) &&
+      entry.type === "attachment" &&
+      isRecord(entry.attachment) &&
+      entry.attachment.type === "goal_status"
+    ) {
+      messages.push(entry);
+      continue;
+    }
+    if (
       !isRecord(entry) ||
       (entry.type !== "user" && entry.type !== "assistant") ||
       typeof entry.uuid !== "string" ||
@@ -84,4 +93,12 @@ export async function readClaudeTranscript(input: {
     messages.push({ ...entry, session_id: input.sessionId });
   }
   return messages;
+}
+
+/** History excludes goal attachments; native goal recovery reads the complete entries. */
+export async function readClaudeTranscript(
+  input: Parameters<typeof readClaudeTranscriptEntries>[0],
+): Promise<unknown[] | null> {
+  const entries = await readClaudeTranscriptEntries(input);
+  return entries?.filter((entry) => !isRecord(entry) || entry.type !== "attachment") ?? null;
 }

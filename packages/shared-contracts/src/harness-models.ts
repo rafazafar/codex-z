@@ -174,6 +174,7 @@ export const harnessSessionCapabilitiesSchema = z
       })
       .strict()
       .optional(),
+    goals: z.object({ observe: z.boolean() }).strict().optional(),
     autonomousTurns: z
       .object({
         observe: z.boolean(),

@@ -50,6 +50,7 @@ const taskNotificationRecordPattern = /^\s*<task-notification>[\s\S]*<\/task-not
 const commandEnvelopePattern = /^\s*(?:<(command-(?:message|name|args))>[\s\S]*?<\/\1>\s*)+$/u;
 const controlCommandNamePattern = /<command-name>\s*\/(?:model|compact)\s*<\/command-name>/u;
 const recapCommandNamePattern = /<command-name>\s*\/recap\s*<\/command-name>/u;
+const goalCommandNamePattern = /<command-name>\s*\/goal\s*<\/command-name>/u;
 const initCommandNamePattern = /<command-name>\s*\/init\s*<\/command-name>/u;
 const localCommandStdoutPattern =
   /^\s*<local-command-stdout>([\s\S]*)<\/local-command-stdout>\s*$/u;
@@ -73,6 +74,10 @@ function isNamedCommandEnvelope(text: string, namePattern: RegExp): boolean {
 function displayedUserText(text: string): string {
   if (isNamedCommandEnvelope(text, initCommandNamePattern)) return "/init";
   if (isNamedCommandEnvelope(text, recapCommandNamePattern)) return "/recap";
+  if (isNamedCommandEnvelope(text, goalCommandNamePattern)) {
+    const args = /<command-args>([\s\S]*)<\/command-args>\s*$/u.exec(text)?.[1]?.trim();
+    return args ? `/goal ${args}` : "/goal";
+  }
   return text;
 }
 
